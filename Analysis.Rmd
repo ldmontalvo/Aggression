@@ -1,0 +1,1809 @@
+---
+title: "Aggression Interference"
+author: "Daniel Montalvo"
+date: "5/2/2022"
+output: output=github_document
+---
+
+<center>
+
+<h1>Exploratory Analysis for Playback Expriments</h1>
+
+</center>
+
+<center>
+
+<h2>Luis Daniel Montalvo</h2>
+
+</center>
+
+
+### Introduction
+
+Here, I am analyzing data from playback experiments carried out in 2018 to study aggressive interference.
+```{r setup, include=FALSE}
+
+rm(list=ls())
+
+setwd("C:/Users/Daniel/Dropbox/Thesis/Aggressive Behavior/R")
+#setwd("C:/Users/USER/Dropbox/Thesis/Aggressive Behavior/R")
+#setwd("C:/Users/USER/Dropbox/Thesis/Count_Analysis/data_carpentry")
+
+load("Exp4.RData")
+```
+
+
+
+#### Packages
+
+```{r General Packages, echo=FALSE}
+
+##### Spatial Analysis Packages
+#install.packages(c("spdep", "sp", "raster","rgdal","ClimDatDownloadR", "rgeos", "envirem"), dependencies=TRUE)
+
+## General packages
+install.packages(c("gdalUtils", "httr", "ncdf4", "qpdf", "raster", "RCurl", "RefManageR", "rgdal", "stringr", "sf", "sp", "svMisc", "utils"), dependencies = TRUE)
+install.packages("gridExtra")
+install.packages("ggpattern")
+install.packages("tidyverse")
+
+#### Visualization of PCA
+library(devtools)
+install_github("vqv/ggbiplot")
+
+#### Trying to install Climdatdownloadr
+install.packages("https://gitlab.rrz.uni-hamburg.de/helgejentsch/climdatdownloadr/-/archive/master/climdatdownloadr-master.tar.gz", repos = NULL, type = "source")
+
+##### Statistical Packages
+install.packages(c("Hmisc","PerformanceAnalytics"), dependencies=TRUE)
+install.packages("Hmisc")
+
+#### Installing the packages for GLMM
+install.packages("cAIC4")
+install.packages("selectiveInference")
+install.packages("glmmLasso")
+
+## Calling the packages
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(envirem) # Have to be called first to avoid conflict with raster packages
+library(spdep)
+library(raster)
+library(rgdal)
+#library(climdatdownloadr)
+library(rgeos)
+library(sp)
+library(Hmisc)
+library(PerformanceAnalytics)
+library(MASS);library(nlme)
+library(cAIC4)
+library(selectiveInference)
+library(glmmLasso)
+library(plyr)
+library(dplyr)
+
+
+```
+
+
+
+#### Data Management
+
+I am reading the playback experiment data, metadata of the experiments, spatial, climate and genetic data.
+```{r Reading Files and General Data Management, echo=FALSE}
+
+## Reading the original data for the experiments
+Exp.raw <- read.csv("Data.csv", sep=",", header=TRUE, stringsAsFactors = FALSE)
+Exp.raw$Dist <- as.numeric(as.character(Exp.raw$Dist))
+
+## Getting rid of others species other than wrens
+Exp.wrens <- subset(Exp.raw,Exp.raw$Species == "BBWR" |
+                      Exp.raw$Species == "FWR" |
+                      Exp.raw$Species == "BBxFWR")
+
+## Reading data for the description of experiments (metadata)
+Meta.exp.raw <- read.csv("Exp.csv", sep=",", header=TRUE, as.is=T)
+
+## Merging the experiments data and the metadata of the experiments
+Exp.meta<-merge(Exp.wrens, Meta.exp.raw, by=c("Exp"))
+
+## Writing the data for other analyses
+write.csv(Exp.meta,  file="Expmeta.csv")
+
+## Getting the times in seconds as numeric
+Exp.meta$Sec <- as.numeric(Exp.meta$Sec)
+
+## Adding the a variable for the seconds that passed to the first FAP 
+## The experiment last 3 min, but the time was recorded backwards, 
+## so we rest 180 (3 mins) to make time forward.
+## Exp.meta$Timing_sec2 <- 180 - Exp.meta$Timing_sec
+
+## Installing necessary packages
+install.packages("tidyverse")
+library(tidyverse)
+
+## Filtering only data in the time of the treatments
+Exp.treat.filtered <- subset(Exp.meta, Exp.meta$Treatment == "BBWR" | 
+                                       Exp.meta$Treatment == "FWR" |
+                                       Exp.meta$Treatment == "Control")
+
+## I also add environmental data below and it is explained with more detail
+## Reading the data with spatial data (coor and precipitation)
+env <- read.csv("Env.csv", sep=",", header=TRUE, as.is = T)
+
+## I also add genetic data below, including data form structure and hybrid index
+## Reading the data with spatial data and Genetic Cluster from Structure Analysis
+gen.spatial <- read.csv("k4popfile.txt", sep="\t", header=TRUE, as.is = T)
+
+
+### All data: Both treatments ####
+
+## Merging all data
+Exp.all2 <- merge(Exp.treat.filtered, env, by=c("Group"))
+
+## Reading the descriptions of FAPs. We want to get rid of the non Aggressive FAPs
+faps <- read.csv("fap.csv", sep=",", header=TRUE, stringsAsFactors = FALSE)
+
+## Adding the information of FAPs categories
+Exp.all2 <- merge(Exp.all2, faps[,c(1,3)], all.x=TRUE,  by.x="FAP", by.y="Code")
+
+## Removing the rows with no Aggressive Behaviors
+Exp.all2 <- Exp.all2[!grepl("No aggressive", Exp.all2$Category),]
+
+
+## Since the response of the birds were in group, we use it as a unit or sample for 
+## presenting the results. We create a unique code for Experiment, Group and Treatment
+Exp.all2$Cod_sam <- paste(Exp.all2$Group, Exp.all2$Exp, Exp.all2$Treatment, sep=".")
+
+## Extracting only rows with the shortest distance reached in the treatment
+Exp.min <- Exp.all2 %>% 
+  group_by(Pop, Group, Treatment, Cod_sam) %>%
+  slice(which.min(Dist))
+
+## We also use total (abundance) and unique (richness) number of FAPs
+Exp.fap <- Exp.all2 %>%
+  dplyr::group_by(Pop, Group, Treatment, Cod_sam) %>%
+  dplyr::summarise(TFAP=length(FAP), 
+            NFAP=length(unique(FAP)))
+
+
+######################      MASTER DATAFRAME      ##############################
+## Merging the FAPs variables and the distance and latency in the same dataframe
+Exp.codes <- merge(Exp.min, Exp.fap, by="Cod_sam")
+Exp.codes$Timing_sec <- as.numeric(Exp.codes$Timing_sec)
+################################################################################
+
+
+
+```
+
+
+
+#### Exploratory Plotting
+
+```{r Exploratoy Plotting}
+
+
+################################################################################
+
+## Aggregating data by Experiment, Treatment and Species.
+Exp.sum <- Exp.treat.filtered %>%
+  dplyr::group_by(Exp, Treatment, Species.x, Group, First) %>%
+  dplyr::summarise(Latency=min(Sec, na.rm=TRUE), 
+            Min_Dist=min(Dist, na.rm=TRUE),
+            Total_Num_FAP=length(FAP), 
+            Total_type_FAP=length(unique(FAP)))
+
+## Merging all data
+Exp.all <- merge(Exp.sum, gen.spatial, by=c("Group"))
+
+## Ordering by Latitude
+Exp.all <- Exp.all[order(Exp.all$Lat),]
+
+## Sites order
+site_order <- rev(unique(Exp.all$Pop))
+
+## Site Order switching places between Patricia Pilar
+## and Chone. The former should be closer to the north sites
+
+site_order2 <- site_order[1]
+
+## Group order
+temp <- seq(1,12,1) # creating a dataframe with the order of sites
+site_order_temp <- cbind(site_order, temp)
+colnames(site_order_temp) <- c("Pop", "Pop_ord")# names of columns
+temp3 <- merge(Exp.treat.filtered, env, by="Group")# putting sites
+temp4 <- merge(temp3, site_order_temp, by="Pop")# adding the order
+temp4$Pop_ord <- as.integer(temp4$Pop_ord)# #making the order numeric
+temp4 <- temp4[order(temp4$Pop_ord, temp4$Lat),]# ordering by site and latitude
+grp_order <- unique(temp4$Group)# getting the order of groups
+
+
+## Plotting minimum distance per species and treatment
+plot.treat1 <- ggplot(Exp.all, aes(x =factor(Pop, level = site_order), y = log(Latency+1), fill = Treatment)) +
+  xlab("Populations") + ylab("Minimum Distance (log x+1)") +
+  labs(title = "Minimum Distance") +
+  geom_boxplot()
+plot.treat1 + scale_fill_grey(start=0.8, end=0.5) + theme_bw()
+
+```
+
+The previous plot didn't allow us to see much of a pattern.
+
+
+#### Exploratory Plotting: Per Population Without Order of Treatment
+
+In these plots, I defined populations as sampling sites. In the plots it is shown as
+sampling sites while in the dataframes and code it is refered as populations.
+```{r Exploratory Plotting: Per Sampling Site}
+
+################################################################################
+
+
+Exp.nord <- Exp.codes[, c("Group.x", "Treatment.x", "Dist", "Timing_sec", "Pop.x", "TFAP", "NFAP")]
+
+## Names of the columns
+colnames(Exp.nord) <- c("Group", "Treatment", "Dist", "Latency", "Pop", "TFAP", "NFAP")
+
+## PLOTTING ####
+
+## Plotting Distance ####
+plot.dist.nord  <- ggplot(Exp.nord, aes(x=factor(Pop, level=site_order), y=Dist,
+                                      fill=Treatment))+
+  geom_boxplot()+
+  scale_fill_manual(values=c("#00CCFF","#11ff00", "#FF3333"))+  
+                                        
+  theme_bw()+
+  ggtitle("Minimum Distance per Sampling Site") +
+  theme(axis.title = element_text(face = "bold")) +
+  ylab("Minimum Distance")+
+  xlab("Sampling Site")+
+  theme(axis.text.x = element_text(angle = 40, size=8, vjust = 0.9, hjust=1))+
+  guides(fill=guide_legend(title="Treatments"))
+
+
+## Plotting Latency ####
+plot.lan.nord  <- ggplot(Exp.nord, aes(x=factor(Pop, level=site_order), y=Latency,
+                                      fill=Treatment))+
+  geom_boxplot()+
+  scale_fill_manual(values=c("#00CCFF","#11ff00", "#FF3333"))+  
+                                        
+  theme_bw()+
+  ggtitle("Latency per Sampling Site") +
+  theme(axis.title = element_text(face = "bold")) +
+  ylab("Latency")+
+  xlab("Sampling Site")+
+  theme(axis.text.x = element_text(angle = 40, size=8, vjust = 0.9, hjust=1))+
+  guides(fill=guide_legend(title="Treatments"))
+
+
+
+## Plotting Number of Unique FAPs per Population ####
+plot.nfap.nord  <- ggplot(Exp.nord, aes(x=factor(Pop, level=site_order), y=NFAP,
+                                      fill=Treatment))+
+  
+  geom_boxplot()+
+  scale_fill_manual(values=c("#00CCFF","#11ff00", "#FF3333"))+  
+
+  theme_bw()+
+  ggtitle("Number of Unique FAPs per Sampling Site") +
+  theme(axis.title = element_text(face = "bold")) +
+  ylab("Number of Unique FAPs")+
+  xlab("Sampling Site")+
+  theme(axis.text.x = element_text(angle = 40, size=8, vjust = 0.9, hjust=1))+
+  guides(fill=guide_legend(title="Treatments"))
+
+
+## Plotting Total Number of FAPs per Population ####
+plot.tfap.nord  <- ggplot(Exp.nord, aes(x=factor(Pop, level=site_order), y=TFAP,
+                                      fill=Treatment))+
+  
+  geom_boxplot()+
+  scale_fill_manual(values=c("#00CCFF","#11ff00", "#FF3333"))+  
+                                        
+  theme_bw()+
+  ggtitle("Total Number of FAPs per Sampling Site") +
+  theme(axis.title = element_text(face = "bold")) +
+  ylab("Total Number of FAPs")+
+  xlab("Sampling Site")+
+  theme(axis.text.x = element_text(angle = 40, size=8, vjust = 0.9, hjust=1))+
+  guides(fill=guide_legend(title="Treatments"))
+
+
+################################################################################
+
+## making a list of plots
+plot.list.nord <- list(
+  plot.dist.nord,
+  plot.lan.nord, 
+  plot.nfap.nord,
+  plot.tfap.nord
+  )
+
+## Create pdf where each page is a separate plot.
+pdf("plot.nord.pdf", width = 12, height = 7, paper="USr")
+for (i in 1:length(plot.list.nord)) {
+    print(plot.list.nord[[i]])
+}
+dev.off()
+
+   
+```
+
+
+
+#### Combining Populations into Genetics Populations
+
+Splitting the data into sites and even more in groups lead to high variation
+of data and obscure the patterns. This is why I decided to pull all the groups by
+the genetic groups identified by my first chapter.
+
+```{r Combining Sampling Sites into Genetic Population (Pop)}
+
+## Combining populations
+
+## Copying the dataframe
+Exp.gc <- Exp.codes
+
+## Sites belonging to Genetic Populations
+CZ <- c("Patricia Pilar", "Las Golondrinas", "Pedro Carbo", "PVM", "Chone")
+CFP_N <- c("Calceta", "Montecristi", "Machalilla", "Manglares Churute")
+CFP_S <- c("Arenillas", "Zapotillo", "Cazaderos")
+
+
+## Sampling sites for CZ have CZ in column Pop
+for(i in 1:length(CZ)){
+Exp.gc$GC[Exp.gc$Pop.x == CZ[i]] <- "CZ"}
+
+
+## Sampling sites for CFP_N have CFP_N in column Pop
+for(i in 1:length(CFP_N)){
+Exp.gc$GC[Exp.gc$Pop.x == CFP_N[i]] <- "CFP_N"}
+
+
+## Sampling sites for CFP_S have CFP_S in column Pop
+for(i in 1:length(CFP_S)){
+Exp.gc$GC[Exp.gc$Pop.x == CFP_S[i]] <- "CFP_S"}
+
+
+## Creating an order for Genetic Population
+gc_order <- c("CZ", "CFP_N", "CFP_S")
+
+## Order of Populations
+Exp.gc$GC <- factor(Exp.gc$GC, levels=gc_order)
+
+## Plotting 
+
+## Names of Variables
+resp.var <- names(Exp.gc)[c(15,11,50,51)]
+
+## Y axis titles
+names.var <- c("Minimum Distance", 
+               "Latency",
+               "Total Number of FAPs", 
+               "Number of Unique FAPs")
+
+## Plotting in loop
+plots.gc <- list()
+for(i in 1:8){
+  pt <- ggplot(Exp.gc, aes_string(x='GC', y=resp.var[i],
+                                      fill='Treatment.x'))+
+  geom_boxplot()+
+  scale_fill_manual(values=c("#00CCFF","#11ff00", "#FF3333"))+  
+                                        
+  theme_bw()+
+  #ggtitle("Minimum Distance per Population") +
+  theme(axis.title = element_text(face = "bold")) +
+  ylab(names.var[i])+
+  xlab("Populations")+
+  theme(axis.text.x = element_text(angle = 40, size=8, vjust = 0.9, hjust=1))+
+  guides(fill=guide_legend(title="Treatments"))
+  plots.gc[[i]] <- print(pt)
+}
+names(plots.gc) <- names.var
+
+## Create pdf where each page is a separate plot.
+pdf("plot.gc.pdf", width = 12, height = 7, paper="USr")
+
+for (i in 1:length(plots.gc)) {
+    print(plots.gc[[i]])
+}
+dev.off()
+
+dim(plots.gc)
+
+
+```
+
+
+
+#### Working with Environmental Variables
+
+```{r Getting the Environmental Variables, echo=FALSE}
+
+################################################################################
+
+## Spatial Analysis Packages
+#install.packages(c("spdep", "sp", "raster","rgdal","ClimDatDownloadR", "rgeos", "envirem"), dependencies=TRUE)
+
+## Statistical Packages
+install.packages(c("Hmisc","PerformanceAnalytics"), dependencies=TRUE)
+install.packages("Hmisc")
+
+
+library(envirem) # Have to be called first to avoid conflict with raster packages
+library(spdep)
+library(raster)
+library(rgdal)
+library(ClimDatDownloadR)
+library(rgeos)
+library(sp)
+library(Hmisc)
+library(PerformanceAnalytics)
+
+
+## Getting name of groups and coodinates
+gr.coor <- env[,c("Group", "Lat", "Long")]
+
+## Making the coordinates numeric
+coor <- cbind(as.numeric(as.character(gr.coor$Long)), as.numeric(as.character(gr.coor$Lat)))
+
+## Setting the coordinates system as Long/Lat
+cord.dec = SpatialPoints(cbind(coor[,1], coor[,2]), proj4string=CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84"))
+
+
+## Most of this code came from http://envirem.github.io/ENVIREM_tutorial.html
+## I don't to run Chelsa.Clim.download because I already did it. Below is the path 
+## Where the raster are
+Chelsa.Clim.download(parameter = "bio",
+                     bio.var =  c(1:19), 
+                     version.var = "1.2", 
+                     clipping = FALSE, 
+                     clip.extent = c(-81.5, -77.6, -7, 1.5), 
+                     buffer = 0, 
+                     convert.files.to.asc = FALSE, 
+                     stacking.data = TRUE, 
+                     combine.raw.zip = FALSE,
+                     delete.raw.data = FALSE,
+                     save.bib.file = TRUE)
+
+
+## Setting the directory where the clipped raster was saved
+wd <- ("C:\\Users\\Daniel\\Dropbox\\Thesis\\Molecular_Wrens\\Radseq\\IBE\\bio\\bio_V1.2\\clipped\\")
+
+## Creating a list with the names of all raster files 
+list.raster <- list.files(wd, full.names = TRUE)
+
+## Reading and stacking the rasters
+stack.ch <- stack(list.raster[1:19])
+
+## Extracting the values for the sampling points I have
+values.ch <- raster::extract(stack.ch, cord.dec)
+
+## Naming the columns
+colnames(values.ch) <- c("AMT","MDR","ISO","TS","MTWM","MTCM","TAR","MTWetQ","MTDQ","MTWarQ","MTCQ","AMP","PWetM","PDM","PS","PWetQ","PDQ","PWarQ","PCQ")
+
+## Merging the coordinates, Chelsa values, population labels
+coor.clim.raw.ch <- cbind.data.frame(coordinates(coor), values.ch)
+colnames(coor.clim.raw.ch)[1:2] <- c("Long", "Lat")
+coor.clim.raw.ch <- cbind(gr.coor, coor.clim.raw.ch)
+
+
+################################################################################
+
+## Getting NDVI
+
+install.packages("MODISTools")
+library(MODISTools)
+
+## View Variables we could use
+View(mt_products())
+View(mt_bands(product = "ECO4ESIPTJPL"))
+View(mt_dates(product = "MOD13Q1", lat=coor[1,2], lon=coor[1,1]))
+
+
+## Products
+    # Bands
+
+## MOD13Q1: MODIS/Aqua Vegetation Indices (NDVI/EVI) 16-Day L3 Global 250m SIN Grid
+    # 250m_16_days_EVI
+    # 250m_16_days_NDVI
+
+## MOD15A2H: MODIS/Terra Leaf Area Index/FPAR (LAI/FPAR) 8-Day L4 Global 500 m SIN Grid
+    # Lai_500m
+
+## ECO4ESIPTJPL: ECOSTRESS Evaporative Stress Index PT-JPL (ESI) Daily L4 Global 70 m
+    # ESIavg
+    # PET
+
+## Getting the coordinates data frame in the right format for the app
+coor.mt <- gr.coor
+colnames(coor.mt) <- c("site_name", "lat", "lon")
+
+## Running MODISTools to get EVI
+evi_raw <- mt_batch_subset(df=coor.mt, product="MOD13Q1",
+                           band="250m_16_days_NDVI",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19")
+
+detach(package:plyr)# sometimes plyr package don't let summarise to work
+
+## Getting a summary
+evi_sum <- evi_raw %>%
+  dplyr::group_by(site) %>%
+  dplyr::summarise(evi = mean(value, na.rm=TRUE),
+            evi_sd = sd(value, na.rm=TRUE))
+
+## Setting the names of the EVI
+colnames(evi_sum) <- c("Group", "evi", "evi_sd")
+
+##### Getting reduced columns
+IV.ch <- coor.clim.raw.ch[,c(1,6,17,20)]
+
+## Merging group name and climate
+gr.iv <- merge(env[,c("Group", "Pop", "Lat", "Long", "Alt")], IV.ch, by="Group")
+colnames(gr.iv)[1:2] <- c("Group", "Pop")
+
+## Merging the climate and evi variables
+gr.iv <- merge(gr.iv, evi_sum, by="Group", all.x=TRUE)
+
+## Merging spatial and climate
+pop.order <- merge(gen.spatial, gr.iv, by=c("Group"))
+
+## Ordering by Latitude
+pop.order <- pop.order[order(-pop.order$AMP),]
+
+## Sites order
+site_order_clim <- unique(pop.order$Pop)
+
+## Merging all data of aggression variables and climate
+Exp.all.clim <- merge(Exp.gc, gr.iv, by.x="Group.x", by.y="Group")
+
+## Deleting rows for Exp PB028. There was two Exp for this group
+## I'm deleting the first one.
+Exp.treat.filtered <- Exp.treat.filtered[!grepl("PB028", Exp.treat.filtered$Exp),]
+
+## Extracting the number of individuals in Exp
+code <- Exp.treat.filtered %>%
+  dplyr::group_by(Group, Treatment, Code) %>%
+  dplyr::summarise(Inv = unique(Inv.y))
+
+
+######################      MASTER DATAFRAME      ##############################            
+## join Number of individuals in Exp and variables
+colnames(Exp.all.clim)[c(1,5)] <- c("Group", "Treatment")
+Exp.all.clim <- merge(Exp.all.clim, code, by=c("Group", "Treatment"))
+################################################################################
+
+
+
+## Extracting the variables we need
+Exp.all.clim <- Exp.all.clim[,c("GC", "Exp", "Pop.x", "Group", "Treatment", "Dist", 
+                                "Timing_sec", "TFAP", "NFAP", 
+                                "Lat.x", "Long.x", "Alt.x", "AMT", "AMP",
+                                "PS", "evi", "evi_sd", "Inv", "Code.x")]
+
+
+
+```
+
+
+
+#### Exploring Relationship of Individuals singing in Recordings and Minimum Distance
+
+```{r Exploring Relationship of Individuals in Recordings and Minimum Distance, echo=FALSE}
+
+
+## Reading metadata of the recording used in the experiments
+rec.meta.raw <- read.table("Recordings metadata.txt", sep="\t", header = TRUE)
+rec.indsing <- rec.meta.raw[,c("Code", "Playback", "GroupSize", "InvSinging")]
+#rec.indsing <- rec.indsing[rec.indsing$Playback == "No", c("Code", "InvSinging")]
+
+## Join Climate, experiment data and recording metadata
+Exp.clim.ind <- merge(Exp.all.clim, rec.indsing, by.x=c("Code.x"), by.y=c("Code"))
+
+
+################################################################################
+## Getting residuals of regression of Latitude and Climate Variables
+## To test the effects of climate on aggression independent of Latitude
+
+#Exp.clim.ind <- cbind(Exp.clim.ind, residuals(lm(AMT ~ Lat, data=Exp.clim.ind)))
+#Exp.clim.ind <- cbind(Exp.clim.ind, residuals(lm(AMP ~ Lat, data=Exp.clim.ind)))
+#Exp.clim.ind <- cbind(Exp.clim.ind, residuals(lm(PS ~ Lat, data=Exp.clim.ind)))
+#Exp.clim.ind <- cbind(Exp.clim.ind, residuals(lm(evi ~ Lat, data=Exp.clim.ind)))
+#Exp.clim.ind <- cbind(Exp.clim.ind, residuals(lm(evi_sd ~ Lat, data=Exp.clim.ind)))
+
+
+######################      MASTER DATAFRAME      ##############################
+## Changing the names of columns
+colnames(Exp.clim.ind) <- c("Code.x", "Exp", "Pop.x", "Sites", "Group", "Treatment", "Dist", 
+                            "Timing_sec", "TFAP", "NFAP", 
+                            "Lat.x", "Long.x", "Alt.x", "AMT", "AMP", 
+                            "PS", "evi", "evi_sd", "GroupSize", "Playback", 
+                            "InvSinging")
+################################################################################
+
+
+################################################################################
+
+## Getting Independent Variables for multiple correlations
+IV.ch.all <- coor.clim.raw.ch[,c(6:24)]
+rcorr(as.matrix(IV.ch.all), type = c("pearson"))
+
+## Plotting multiple correlations
+chart.Correlation(IV.ch.all, method = "pearson", histogram = TRUE, pch = 16)
+
+################################################################################
+
+
+#### T-test to see effects of the Number of individuals in the recording and Minimum Distance  ####
+
+## Dist
+
+t.test(Exp.clim.ind[Exp.clim.ind$InvSinging == "2", c("Dist")], Exp.clim.ind[Exp.clim.ind$InvSinging == "3", c("Dist")], var.equal=TRUE)
+
+## Plotting Minimum distance for recordings with two and three individuals
+boxplot(Exp.clim.ind[Exp.clim.ind$InvSinging == "2", c("Dist")], Exp.clim.ind[Exp.clim.ind$InvSinging == "3", c("Dist")])
+
+## No relationship was found
+
+
+## Latency
+
+t.test(Exp.clim.ind[Exp.clim.ind$InvSinging == "2", c("Timing_sec")], Exp.clim.ind[Exp.clim.ind$InvSinging == "3", c("Timing_sec")], var.equal=TRUE)
+
+## Plotting Minimum distance for recordings with two and three individuals
+boxplot(Exp.clim.ind[Exp.clim.ind$InvSinging == "2", c("Timing_sec")], Exp.clim.ind[Exp.clim.ind$InvSinging == "3", c("Timing_sec")])
+
+## No relationship was found
+
+
+## TFAP
+
+t.test(Exp.clim.ind[Exp.clim.ind$InvSinging == "2", c("TFAP")], Exp.clim.ind[Exp.clim.ind$InvSinging == "3", c("TFAP")], var.equal=TRUE)
+
+## Plotting Minimum distance for recordings with two and three individuals
+boxplot(Exp.clim.ind[Exp.clim.ind$InvSinging == "2", c("TFAP")], Exp.clim.ind[Exp.clim.ind$InvSinging == "3", c("TFAP")])
+
+## No relationship was found
+
+
+```
+
+
+We didn't found significant a effect of the number of individuals singing in the recordings
+on either of the distance, latency or TFAP responses.
+
+Now we know that there is not a clear effect of the number of individuals singing in the recordings used and the minimum distance we can develop more complex models in glmmLasso accounting for species, groupsize and the residuals of precipitation and Latitude. We want to include species, group and body size as independent variables (fixed effect).
+
+
+
+#### Adding Morphometric and Genetic Data
+
+We are adding wing and tarsus length as a measure of body size and the Structure probabilities
+of belonging to a specific group when K=3.
+
+
+```{r Adding Morphometric and Structure and Hybrid Index, echo=FALSE}
+
+## Reading the morphometric data
+morpho.raw <- read.csv("Morpho.csv", sep=",", header=TRUE, stringsAsFactors = FALSE)
+
+## Summarizing data per group
+detach(package:ggbiplot)# if this package was called last, it won't let work the next commands
+detach(package:plyr)
+
+morpho.sum <- morpho.raw %>%
+  dplyr::group_by(Group) %>%
+  dplyr::summarise(Body.Len = mean(LCorporal, na.rm=TRUE),
+            sd_Body.L = sd(LCorporal),
+            Bill.L = mean(LPTotal, na.rm=TRUE),
+            sd_Bill.L = sd(LPTotal, na.rm=TRUE),
+            Wing.L = mean(LAla, na.rm=TRUE),
+            sd_Wing.L = sd(LAla, na.rm = TRUE),
+            Tail.L = mean(LCola, na.rm = TRUE),
+            sd_Tail.L = sd(LCola, na.rm = TRUE),
+            Tarsus.L = mean(Ltarso, na.rm = TRUE),
+            sd_Tarsus.L = sd(Ltarso, na.rm = TRUE),
+            Weight = mean(Peso, na.rm = TRUE),
+            sd_Weight = sd(Peso, na.rm = TRUE),
+            HBill = mean(AltoP, na.rm=TRUE),
+            sd_HBill = sd(AltoP, na.rm=TRUE),
+            WBill = mean(AnchoP, na.rm=TRUE),
+            sd_WBill = sd(AnchoP, na.rm=TRUE))
+
+
+## Making a PCA for morphometrics
+morpho.sum1 <- morpho.sum[,c("Body.Len", "Bill.L", "Wing.L", "Tail.L", "Tarsus.L")]
+morpho.pca <- prcomp(morpho.sum1)
+summary(morpho.pca)
+morpho.pc1 <- morpho.pca$x[,1]
+morpho.sum2 <- cbind(morpho.sum, morpho.pc1)
+
+## Plotting the PCA
+library(plyr)
+library(ggbiplot)
+ggbiplot(morpho.pca, obs.scale = 0.5)+
+  theme_minimal()
+detach(package:ggbiplot)# if this package was called last, it won't let work the next commands
+detach(package:plyr)
+
+## The PC1 summarize the 68% of the variation in the morphometric data
+
+
+## Reading genetic data with cluster from Structure
+gen.cluster <- read.table("k4popfile.txt", sep="\t", header = TRUE)
+
+## Getting proportions 
+gen.pr <- gen.cluster %>%
+  dplyr::group_by(Group) %>%
+  dplyr::summarise(CZ = mean(CZ),
+            CFP_n =mean(CFPxCZ),
+            CFP_S = mean(CFFxCFP),
+            CFF = mean(CFF))
+
+
+## We could also use the Hybrid index
+## Reading data with hybrid index
+hi.index <- read.csv("hi.index.csv", sep=",", header=TRUE, stringsAsFactors = FALSE)
+hi.index <- merge(hi.index, Exp.all, by="Ind")
+hi.idx <- hi.index %>%
+  dplyr::group_by(Group) %>%
+  dplyr::summarise(Hindex = mean(h))
+
+## Getting the names of the clusters and populations
+#pop.cluster <- gen.cluster %>%
+#  distinct(Pop, top1name)
+
+## Edit the group name manually. For the group I didn't have an assigned cluster
+## I assigned the predominate cluster in the population.
+#pop.cluster <- edit(pop.cluster)
+#pop.cluster <- pop.cluster[pop.cluster$top1name != "no",]
+
+## Merging the data with morpho
+Exp.all.var <- merge(Exp.clim.ind, morpho.sum2, by="Group", all.x=TRUE)
+
+## Merging the data with genetic proportions
+Exp.all.var <- merge(Exp.all.var, gen.pr, by="Group", all.x=TRUE)
+
+## Merging the data with genetic proportions
+Exp.all.var <- merge(Exp.all.var, hi.idx, by="Group", all.x=TRUE)
+
+
+################################################################################
+
+## Adding the clusters assigned by Structure
+#Exp.all.var <- merge(Exp.all.var, pop.cluster, by="Pop", all.x=TRUE)
+
+### Scaling the data
+Exp.pop.all2 <- Exp.all.var
+
+
+######################      MASTER DATAFRAME      ##############################
+## Scaling the predictors
+Exp.pop.all2$Treatment <- as.factor(Exp.pop.all2$Treatment)
+Exp.pop.all2$Group <- as.factor(Exp.pop.all2$Group)
+Exp.pop.all2$Pop <- as.factor(Exp.pop.all2$Pop)
+################################################################################
+
+
+## Table for Arcgis
+Group.meta <- Exp.pop.all2 %>%
+  dplyr::group_by(Group, Pop) %>%
+  dplyr::summarise(Lat = mean(Lat.x, na.rm=TRUE),
+                   Long = mean(Long.x, na.rm=TRUE),
+                   Grpsize = mean(GroupSize))
+
+
+## Writing the data for other analyses
+write.csv(Group.meta,  file="grpmeta.csv")
+
+
+
+```
+
+
+
+#### PCA for Aggression and Plotting
+
+```{r PCA for Aggression and Plotting}
+
+
+## Getting the variables we need.
+Exp.gc.var <- Exp.gc[,c("Group.x", "Treatment.x", "Dist", "Timing_sec", "Sec", "TFAP", "Pop.x", "GC")]
+
+## Names of the columns
+colnames(Exp.gc.var) <- c("Group", "Treatment", "MinDist", "Latency", "Sec", "TFAP", 
+                          "Pop", "GC")
+
+Exp.gc.var$Latency_sc <- scale(Exp.gc.var$Latency)
+Exp.gc.var$MinDist_sc <- scale(Exp.gc.var$MinDist)
+Exp.gc.var$TFAP_sc <- scale(Exp.gc.var$TFAP)
+
+## PCA to combine Distance, Latency and TFAPS to obtain Aggression
+pca.3var <- prcomp(na.omit(Exp.gc.var[,c("MinDist_sc", "Latency_sc", "TFAP_sc")]))
+
+## Summary of PCA
+sum.pca <- summary(pca.3var)
+
+## Plotting the PCA
+install.packages("ggfortify")
+library(ggfortify)
+
+
+## Plotting PCA
+#biplot(pca.3var)
+pca1.plot <- ggplot2::autoplot(pca.3var, data = na.omit(Exp.gc.var), colour = 'GC', loadings = TRUE, 
+                      loadings.colour = 'black', loadings.label = TRUE, loadings.label.size = 7) +
+                      labs(colour="Genetic Cluster") +
+                      scale_color_manual(labels = c("CZ", "CFPn", "CFPs"), values = c(2,3,4)) +
+                      theme_bw()
+
+## Plot pca1.plot factoring in the genetic cluster
+pca1.plot <- pca1.plot + theme(legend.text = element_text(size=30)) + 
+                      theme(axis.text.x = element_text(size=20)) +
+                      theme(axis.text.y = element_text(size=20))
+
+## increase font size of axes and legend titles in pca1.plot
+pca1.plot <- pca1.plot + theme(legend.title = element_text(size=30)) + 
+                      theme(axis.title.x = element_text(size=25)) +
+                      theme(axis.title.y = element_text(size=25))
+
+## Save the plot as jpeg
+ggsave("pca1.plot.jpeg", plot = pca1.plot, width = 30, height = 20, units = "cm", dpi=700)
+
+
+## Getting the PC1 of the selected PCA
+pc1.3var <- pca.3var$x[,c(1:2)]
+
+
+######################      MASTER DATAFRAME      ##############################
+## Combining variables and PC1
+Exp.pc1 <- cbind(na.omit(Exp.gc.var), pc1.3var)
+Exp.pop.all2 <- merge(Exp.pop.all2, Exp.pc1, by=c("Group", "Treatment"))
+################################################################################
+
+
+## Getting matrix with response variable
+var.cor <- Exp.pop.all2[,52:55]
+var.cor$PC1 <- scale(var.cor$PC1)
+
+## Getting a matrix with coefficients and pvalues
+rcorr(as.matrix(var.cor), type=c("pearson"))
+
+## Plotting multiple correlations
+jpeg(file="cor.res.plot.jpeg", units="in", width=8, height=5, res=300)
+chart.cor <- chart.Correlation(var.cor, method = "pearson", histogram = TRUE, pch = 16)
+dev.off()
+
+colnames(Exp.pc1)
+
+## PLOTTING PC1
+plot.pc1.gc <- ggplot(Exp.pc1, aes_string(x='GC', y="PC1",
+                                      fill='Treatment'))+
+  geom_boxplot()+
+  scale_fill_manual(values=c("#00CCFF","#11ff00", "#FF3333"),
+    labels = c("C. z. brevirostris", "Control", "C. f. pallescens South")) +  
+                                        
+  theme_bw()+
+  #ggtitle("PC1") +
+  theme(axis.title = element_text(face = "bold")) +
+  ylab("pca1")+
+  xlab("Genetic Clusters")+
+  theme(axis.text.x = element_text(angle = 0, size=8, vjust = 0.9, hjust=0.5))+
+  guides(fill=guide_legend(title="Treatments"))+
+  theme(axis.text.x = element_text(size=15)) +
+  theme(axis.text.y = element_text(size=15)) +
+  theme(axis.title.x = element_text(size=20)) +
+  theme(axis.title.y = element_text(size=20)) +
+  theme(legend.text = element_text(size=20)) +
+  theme(legend.title = element_text(size=20))
+
+## Add new label for axis x in plot.latency.gc
+plot.pc1.gc <- plot.pc1.gc + scale_x_discrete(labels = c("C. z. brevirostris", "C. f. pallescens North", "C. f. pallescens South"))
+
+## Move legend inside the plot area in plot.mindist.gc
+#plot.pc1.gc <- plot.pc1.gc + theme(legend.position = c(0.8, 0.8))
+
+## Save the plot as jpeg
+ggsave("plot.pc1.gc.jpeg", plot = plot.pc1.gc, width = 30, height = 20, units = "cm", dpi=700)
+
+
+## PLOTTING MIN DISTANCE
+plot.mindist.gc <- ggplot(Exp.pc1, aes_string(x='GC', y="MinDist_sc",
+                                      fill='Treatment'))+
+  geom_boxplot()+
+  scale_fill_manual(values=c("#00CCFF","#11ff00", "#FF3333"),
+    labels = c("C. z. brevirostris", "Control", "C. f. pallescens South")) +  
+                                        
+  theme_bw()+
+  #ggtitle("PC1") +
+  theme(axis.title = element_text(face = "bold")) +
+  ylab("Minimum Distance Scaled")+
+  xlab("Genetic Clusters")+
+  theme(axis.text.x = element_text(angle = 0, size=8, vjust = 0.9, hjust=0.5))+
+  guides(fill=guide_legend(title="Treatments"))+
+  theme(axis.text.x = element_text(size=15)) +
+  theme(axis.text.y = element_text(size=15)) +
+  theme(axis.title.x = element_text(size=20)) +
+  theme(axis.title.y = element_text(size=20)) +
+  theme(legend.text = element_text(size=20)) +
+  theme(legend.title = element_text(size=20))
+
+## Add new label for axis x in plot.mindist.gc
+plot.mindist.gc <- plot.mindist.gc + scale_x_discrete(labels = c("C. z. brevirostris", "C. f. pallescens North", "C. f. pallescens South"))
+
+## Move legend inside the plot area in plot.mindist.gc
+#plot.mindist.gc <- plot.mindist.gc + theme(legend.position = c(0.8, 0.8))
+
+## Save the plot as jpeg
+ggsave("plot.mindist.gc.jpeg", plot = plot.mindist.gc, width = 30, height = 20, units = "cm", dpi=700)
+
+
+## PLOTTING LATENCY
+plot.latency.gc <- ggplot(Exp.pc1, aes_string(x='GC', y="Latency_sc",
+                                      fill='Treatment'))+
+  geom_boxplot()+
+  scale_fill_manual(values=c("#00CCFF","#11ff00", "#FF3333"),
+    labels = c("C. z. brevirostris", "Control", "C. f. pallescens South")) +  
+                                        
+  theme_bw()+
+  #ggtitle("PC1") +
+  theme(axis.title = element_text(face = "bold")) +
+  ylab("Latency Scaled")+
+  xlab("Genetic Clusters")+
+  theme(axis.text.x = element_text(angle = 0, size=8, vjust = 0.9, hjust=0.5))+
+  guides(fill=guide_legend(title="Treatments"))+
+  theme(axis.text.x = element_text(size=15)) +
+  theme(axis.text.y = element_text(size=15)) +
+  theme(axis.title.x = element_text(size=20)) +
+  theme(axis.title.y = element_text(size=20)) +
+  theme(legend.text = element_text(size=20)) +
+  theme(legend.title = element_text(size=20))
+
+## Add new label for axis x in plot.latency.gc
+plot.latency.gc <- plot.latency.gc + scale_x_discrete(labels = c("C. z. brevirostris", "C. f. pallescens North", "C. f. pallescens South"))
+
+## Move legend inside the plot area in plot.mindist.gc
+#plot.latency.gc <- plot.latency.gc + theme(legend.position = c(0.8, 0.8))
+
+## Save the plot as jpeg
+ggsave("plot.latency.gc.jpeg", plot = plot.latency.gc, width = 30, height = 20, units = "cm", dpi=700)
+
+
+## PLOTTING TFAP
+plot.tfap.gc <- ggplot(Exp.pc1, aes_string(x='GC', y="TFAP",
+                                      fill='Treatment'))+
+  geom_boxplot()+
+  scale_fill_manual(values=c("#00CCFF","#11ff00", "#FF3333"),
+    labels = c("C. z. brevirostris", "Control", "C. f. pallescens South")) +  
+                                        
+  theme_bw()+
+  #ggtitle("PC1") +
+  theme(axis.title = element_text(face = "bold")) +
+  ylab("TFAP")+
+  xlab("Genetic Clusters")+
+  theme(axis.text.x = element_text(angle = 0, size=8, vjust = 0.9, hjust=0.5))+
+  guides(fill=guide_legend(title="Treatments"))+
+  theme(axis.text.x = element_text(size=15)) +
+  theme(axis.text.y = element_text(size=15)) +
+  theme(axis.title.x = element_text(size=20)) +
+  theme(axis.title.y = element_text(size=20)) +
+  theme(legend.text = element_text(size=20)) +
+  theme(legend.title = element_text(size=20))
+
+## Add new label for axis x in plot.latency.gc
+plot.tfap.gc <- plot.tfap.gc + scale_x_discrete(labels = c("C. z. brevirostris", "C. f. pallescens North", "C. f. pallescens South"))
+
+## Move legend inside the plot area in plot.mindist.gc
+#plot.latency.gc <- plot.tfap.gc + theme(legend.position = c(0.8, 0.8))
+
+## Save the plot as jpeg
+ggsave("plot.tfap.gc.jpeg", plot = plot.tfap.gc, width = 30, height = 20, units = "cm", dpi=700)
+
+
+
+
+
+```
+
+
+
+#### Testing Normality for response variables
+
+```{r Testing Normality}
+
+
+## Exploring Normality ####
+
+## Intalling ggpbur for nice plots
+install.packages("ggpubr")
+library(ggpubr)
+
+## With Minimum Distance
+ggdensity(Exp.gc$MinDist)
+ggdensity(scale(Exp.gc$MinDist))
+
+ggqqplot(Exp.gc$MinDist)
+shapiro.test(Exp.gc$MinDist)
+
+## With Latency
+ggdensity(Exp.gc$Latency)
+ggdensity(scale(Exp.gc$Latency))
+
+ggqqplot(Exp.gc$Latency)
+shapiro.test(Exp.gc$Latency)
+
+## With TFAP
+ggdensity(Exp.gc$TFAP)
+ggdensity(scale(Exp.gc$TFAP))
+
+ggqqplot(Exp.gc$TFAP)
+shapiro.test(Exp.gc$TFAP)
+
+ggqqplot(Exp.mv.clim$MinDist_sc)
+ggqqplot(Exp.mv.clim$Latency_sc)
+ggqqplot(Exp.mv.clim$TFAP_sc)
+shapiro.test(Exp.mv.clim$TFAP_sc)
+
+
+
+plot(density(Exp.mv.clim$MinDist_sc))
+plot(density(Exp.mv.clim$Latency_sc))
+plot(density(Exp.mv.clim$TFAP_sc))
+plot(density(Exp.mv.clim$pca1))
+plot(density(Exp.mv.clim$pca2))
+
+hist(Exp.mv.clim$MinDist_sc, breaks=10)
+hist(Exp.mv.clim$Latency_sc, breaks=10)
+hist(Exp.mv.clim$TFAP_sc, breaks=10)
+
+
+
+```
+
+None of the variables follow a normal distribution
+
+
+#### Multivariate GLMM for Significant Differences in Aggression
+
+We use the R package brms with a Bayesian framework.
+
+We will use Bayesian Generalized Linear Model.
+
+```{r BMGLM for Aggression: Data and General Model}
+
+################################################################################
+## Installing the packaging
+install.packages("rstan", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+install.packages("brms")
+library(brms)
+
+
+## Getting data.
+Exp.mv.clim <- Exp.pop.all2[,c(1,2,4:11,14:16,21,39,44,46,47)]
+
+colnames(Exp.mv.clim) <- c("Group","Treatment", "GC", "Exp","Pop","MinDist","Latency",
+                           "TFAP","NFAP", "Lat", "AMT","AMP","PS", "GrSize_exp",
+                            "Morpho.pca1", "Hindex", "pca1", "pca2")
+
+## Deleting the row with a experiment it didn't work and was incomplete
+## I forgot to take it out before
+Exp.mv.clim <- Exp.mv.clim[- grep("PB028", Exp.mv.clim$Exp),]
+
+Exp.mv.clim$MinDist_sc <-  scale(Exp.mv.clim$MinDist) + 2
+Exp.mv.clim$Latency_sc <-  scale(Exp.mv.clim$Latency) + 2
+Exp.mv.clim$TFAP_sc <-  scale(Exp.mv.clim$TFAP) + 2
+Exp.mv.clim$AMT_sc <- scale(Exp.mv.clim$AMT)
+Exp.mv.clim$AMP_sc <- scale(Exp.mv.clim$AMP)
+Exp.mv.clim$PS_sc <- scale(Exp.mv.clim$PS)
+Exp.mv.clim$Lat_sc <- scale(Exp.mv.clim$Lat)
+Exp.mv.clim$Morpho_sc <- scale(Exp.mv.clim$Morpho.pca1)
+Exp.mv.clim$Hindex_sc <- scale(Exp.mv.clim$Hindex)
+
+
+colnames(Exp.mv.clim)
+
+## Adding the response variable in Exp.mv.clim with residuals of the regression of GrSize_exp vs all other variables
+Exp.mv.clim$RGrSize_exp <- glm(GrSize_exp ~ Lat_sc + AMT_sc + AMP_sc, data=Exp.mv.clim, family=poisson)$residuals
+range(Exp.mv.clim$RGrSize_exp)
+
+## Adding the response variable in Exp.mv.clim with residuals of the regression of AMT vs all other variables
+Exp.mv.clim$RAMT <- lm(AMT_sc ~ Lat_sc + GrSize_exp + AMP_sc, data=Exp.mv.clim)$residuals
+range(Exp.mv.clim$RAMT)
+
+## Adding the response variable in Exp.mv.clim with residuals of the regression of AMP vs all other variables
+Exp.mv.clim$RAMP <- lm(AMP_sc ~ Lat_sc + AMT_sc + GrSize_exp, data=Exp.mv.clim)$residuals
+range(Exp.mv.clim$RAMP)
+
+## Adding the response variable in Exp.mv.clim with residuals of the regression of PS vs all other variables
+Exp.mv.clim$RPS <- lm(PS_sc ~ Lat_sc + AMT_sc + GrSize_exp + AMP_sc, data=Exp.mv.clim)$residuals
+range(Exp.mv.clim$RPS)
+
+## Adding the response variable in Exp.mv.clim with residuals of the regression of Lat vs all other variables
+Exp.mv.clim$RLat <- lm(Lat_sc ~ AMT_sc + GrSize_exp + AMP_sc, data=Exp.mv.clim)$residuals
+range(Exp.mv.clim$RLat)
+
+plot(Exp.mv.clim$Lat, Exp.mv.clim$RAMP)
+
+range(scale(Exp.mv.clim$RPS))
+
+## Write the data for the HPC
+
+## With Morphometric and Hybrid index
+#Exp.mv.clim2<-subset(Exp.mv.clim2, (!is.na(Exp.mv.clim2[,24])) & (!is.na(Exp.mv.clim2[,25])))
+
+write.csv(Exp.mv.clim,  file="Exp.mv.clim.csv")
+
+
+################################################################################
+## Exercise to check the effect of outliers
+
+Exp.mv.clim2 <-
+Exp.mv.clim %>% filter_at(vars(15), any_vars(. <= 3))
+dim(Exp.mv.clim2)
+
+Exp.mv.clim2 <-
+Exp.mv.clim2 %>% filter_at(vars(16), any_vars(. <= 3))
+dim(Exp.mv.clim2)
+
+Exp.mv.clim2 <-
+Exp.mv.clim2 %>% filter_at(vars(17), any_vars(. <= 3))
+dim(Exp.mv.clim2)
+
+
+## Write the data for the HPC
+write.csv(Exp.mv.clim2,  file="Exp.mv.clim2.csv")
+
+## Too many Outliers to detect a signal
+
+################################################################################
+## Exercise to include Geographic Autocorrelation
+
+## Getting Matrix of neighbors, Group in same Sampling Site are neighbors
+dim(Exp.mv.clim)
+W <- matrix(0, nrow(Exp.mv.clim), nrow(Exp.mv.clim))
+colnames(W) <- Exp.mv.clim$Pop
+row.names(W) <- Exp.mv.clim$Pop
+W[outer(rownames(W), colnames(W), "==")] <- 1
+
+#car(W, gr=Pop)
+
+## This made the model too complex for our sampling size
+
+################################################################################
+## Example of full formula
+
+## Formula
+bform.mindist <- bf(MinDist_sc ~ 1 + GrSize_exp + Lat_sc + AMT_sc + AMP_sc + PS_sc + Treatment*GC + (1+Treatment|Group),  
+                     family=exponential(link = "log"))
+
+
+
+bform.latency <- bf(Latency_sc ~ 1 + GrSize_exp + Lat_sc + AMT_sc + AMP_sc + PS_sc + Treatment*GC + (1+Treatment|Group),  
+                     family=exponential(link = "log"))
+
+
+
+bform.tfap <- bf(TFAP_sc ~ 1 + GrSize_exp + Lat_sc + AMT_sc + AMP_sc + PS_sc + Treatment*GC + (1+Treatment|Group), 
+                  family=exponential(link = "log"))
+
+
+## Model fitting
+M7_gz.amt.amp.ps.lat <- brm(bform.mindist + bform.latency + bform.tfap,
+                        data=Exp.mv.clim,
+                        warmup=2000,
+                        iter=10000,
+                        chains = 4,
+                        thin=2,
+                        cores = 8,
+                        control = list(adapt_delta = 0.8),
+                        seed=123)
+
+M7_gz.amt.amp.ps.lat <- add_criterion(M7_gz.amt.amp.ps.lat, "loo")
+
+
+```
+
+
+Here I read the data generated by the HPC and check the outocomes.
+
+```{r BMGLM for Aggression: Outcomes for Step 1}
+
+#install.packages("projpred")
+#library(projpred)
+
+################################################################################
+## STEP 1: Group Size, Treatment and Genetic cluster: 28 models
+
+#load("R.M0-7_4var.RData")
+load("R.M0-6_4var3.RData")
+
+
+## MinDist
+D.comp <- loo_compare(D.M0,
+D.M1,
+D.M2,
+D.M3,
+D.M4,
+D.M5,
+D.M6,
+D.full)
+
+
+D.M0.loo <- loo(D.M0)
+D.M1.loo <- loo(D.M1)
+D.M2.loo <- loo(D.M2)
+D.M3.loo <- loo(D.M3)
+D.M4.loo <- loo(D.M4)
+D.M5.loo <- loo(D.M5)
+D.M6.loo <- loo(D.M6)
+D.full.loo <- loo(D.full)
+
+
+summary(D.M0)
+summary(D.M1)
+summary(D.M2)
+summary(D.M3)
+summary(D.M4)
+summary(D.M5)
+summary(D.M6)
+summary(D.full)
+
+
+## Latency
+L.comp <- loo_compare(L.M0,
+L.M1,
+L.M2,
+L.M3,
+L.M4,
+L.M5,
+L.M6,
+L.full)
+
+L.M0.loo <- loo(L.M0)
+L.M1.loo <- loo(L.M1)
+L.M2.loo <- loo(L.M2)
+L.M3.loo <- loo(L.M3)
+L.M4.loo <- loo(L.M4)
+L.M5.loo <- loo(L.M5)
+L.M6.loo <- loo(L.M6)
+L.full.loo <- loo(L.full)
+
+
+summary(L.M0)
+summary(L.M1)
+summary(L.M2)
+summary(L.M3)
+summary(L.M4)
+summary(L.M5)
+summary(L.M6)
+summary(L.full)
+
+
+## TFAP
+F.comp <- loo_compare(F.M0,
+F.M1,
+F.M2,
+F.M3,
+F.M4,
+F.M5,
+F.M6,
+F.full)
+
+F.M0.loo <- loo(F.M0)
+F.M1.loo <- loo(F.M1)
+F.M2.loo <- loo(F.M2)
+F.M3.loo <- loo(F.M3)
+F.M4.loo <- loo(F.M4)
+F.M5.loo <- loo(F.M5)
+F.M6.loo <- loo(F.M6)
+F.full.loo <- loo(F.full)
+
+
+summary(F.M0)
+summary(F.M1)
+summary(F.M2)
+summary(F.M3)
+summary(F.M4)
+summary(F.M5)
+summary(F.M6)
+summary(F.full)
+
+
+## Aggression pca1
+P.comp <- loo_compare(P.M0,
+P.M1,
+P.M2,
+P.M3,
+P.M4,
+P.M5,
+P.M6,
+P.full)
+
+P.M0.loo <- loo(P.M0)
+P.M1.loo <- loo(P.M1)
+P.M2.loo <- loo(P.M2)
+P.M3.loo <- loo(P.M3)
+P.M4.loo <- loo(P.M4)
+P.M5.loo <- loo(P.M5)
+P.M6.loo <- loo(P.M6)
+P.full.loo <- loo(P.full)
+
+summary(P.M0)
+summary(P.M1)
+summary(P.M2)
+summary(P.M3)
+summary(P.M4)
+summary(P.M5)
+summary(P.M6)
+summary(P.full)
+
+
+################################################################################
+
+## Making a table with elpd_diff and SE_diff
+
+## Making a list with the loo
+mat.comp <- rbind(D.comp, L.comp, F.comp, P.comp)
+View(mat.comp)
+
+
+## Write table
+write.csv(mat.comp,  file="mat.comp.csv")
+
+# make a table with the estimated coefficientfrom all 32 models
+# and the SE
+mat.coef <- rbind(coef(D.M0),
+                  coef(D.M1),
+                  coef(D.M2),
+                  coef(D.M3),
+                  coef(D.M4),
+                  coef(D.M5),
+                  coef(D.M6),
+                  coef(D.full),
+                  coef(L.M0),
+                  coef(L.M1),
+                  coef(L.M2),
+                  coef(L.M3),
+                  coef(L.M4),
+                  coef(L.M5),
+                  coef(L.M6),
+                  coef(L.full),
+                  coef(F.M0),
+                  coef(F.M1),
+                  coef(F.M2),
+                  coef(F.M3),
+                  coef(F.M4),
+                  coef(F.M5),
+                  coef(F.M6),
+                  coef(F.full),
+                  coef(P.M0),
+                  coef(P.M1),
+                  coef(P.M2),
+                  coef(P.M3),
+                  coef(P.M4),
+                  coef(P.M5),
+                  coef(P.M6),
+                  coef(P.full), complete=FALSE)
+
+
+
+############
+
+## Making a table with elpd_loo and SE
+
+## Making a list with the loo
+list.loo <- list(D.M0.loo, D.M1.loo, D.M2.loo, D.M3.loo, D.M4.loo, D.M5.loo, D.M6.loo, D.full.loo,
+                 L.M0.loo, L.M1.loo, L.M2.loo, L.M3.loo, L.M4.loo, L.M5.loo, L.M6.loo, L.full.loo,
+                 F.M0.loo, F.M1.loo, F.M2.loo, F.M3.loo, F.M4.loo, F.M5.loo, F.M6.loo, F.full.loo,
+                 P.M0.loo, P.M1.loo, P.M2.loo, P.M3.loo, P.M4.loo, P.M5.loo, P.M6.loo, P.full.loo)
+
+## Name loo list
+names(list.loo) <- c("D.M0", "D.M1", "D.M2", "D.M3", "D.M4", "D.M5", "D.M6", "D.full",
+"L.M0", "L.M1", "L.M2", "L.M3", "L.M4", "L.M5", "L.M6", "L.full",
+"F.M0", "F.M1", "F.M2", "F.M3", "F.M4", "F.M5", "F.M6", "F.full",
+"P.M0", "P.M1", "P.M2", "P.M3", "P.M4", "P.M5", "P.M6", "P.full")
+
+## Making a table
+matx.loo <- as.data.frame(t(sapply(list.loo, function(x) x$estimates[1,])))
+matx.loo$model <- names(list.loo) # column with models
+
+## Write table
+write.csv(matx.loo,  file="matx.loo.csv")
+
+
+############
+
+## Getting the percentage of Pareto-k-diagnostic greater than 0.7
+
+## Define threshold
+threshold <- 0.7
+
+## Define function to obtain percentages
+perc_gt_threshold <- function(df) {
+  sum(df>threshold) / length(df)*100
+}
+
+
+paretos.1 <- list()
+for(i in 1:length(list.loo)){
+  paretos.1[[i]] <- lapply(as.data.frame(list.loo[[i]]$diagnostics$pareto_k), perc_gt_threshold)}
+
+  paretos.k1 <- t(as.data.frame(paretos.1))
+  paretos.k1 <- cbind(paretos.k1, as.data.frame(names(list.loo)))
+  colnames(paretos.k1) <- c("k7", "Model")
+
+## Write table
+write.csv(paretos.k1,  file="paretos.k1.csv")
+
+## GEt the samples with pareto k over 0.7 from D.full
+D.full.pareto <- list.loo[[7]]$diagnostics$pareto_k
+D.full.pareto <- as.data.frame(D.full.pareto)
+D.full.pareto <- cbind(D.full.pareto, as.data.frame(Exp.mv.clim[,c("Group", "Treatment", "Exp")]))
+colnames(D.full.pareto) <- c("k7", "Model")
+
+names(list.loo[[7]])
+(list.loo[[7]])$pointwise
+
+View(D.full.pareto)
+
+############
+  
+## getting the number of parameters of models
+
+list.m28 <- list(D.M0, D.M1, D.M2, D.M3, D.M4, D.M5, D.M6, D.full,
+                 L.M0, L.M1, L.M2, L.M3, L.M4, L.M5, L.M6, L.full,
+                 F.M0, F.M1, F.M2, F.M3, F.M4, F.M5, F.M6, F.full,
+                 P.M0, P.M1, P.M2, P.M3, P.M4, P.M5, P.M6, P.full)  
+  
+  
+p.28 <- t(as.data.frame(lapply(list.m28, function(x) length(variables(x)))))
+row.names(p.28) <- names(list.loo)
+
+View(p.28)
+
+################################################################################
+
+
+## Plotting
+pp_check(D.full, resp="MinDist", ndraws=100)
+conditional_effects(F.full, surface=TRUE)
+mcmc_plot(P.full)
+plot(D.full)
+
+
+pp_check(D.M6, resp="TFAP_sc", ndraws=100)
+conditional_effects(D.M1, surface=TRUE)
+mcmc_plot(D.M2)
+plot(D.M6)
+
+
+
+library(bayesplot)
+
+## Making a distribution area plot
+mcmc_areas(as.matrix(D.M1)[,1:6])
+
+
+
+
+```
+
+
+Only D.M6 showed 0.5% of pareto-k-diagnostica over 0.7. The rest of models showed most of paretos under 0.5 which indicates the models estimates are reliable.
+
+
+```{r BMGLM for Aggression: Outcomes for Step 2}
+
+
+################################################################################
+## Step 2: Best models from previous step  one climate variable at the time
+
+
+## Data without variables as residuals
+load("M0-6_4var.RData")
+load("M_full.RData")
+
+
+## Models using residuals from regression agaisnt Latitude as variables
+load("R.M0-7_4var2.RData")
+
+
+## MinDist
+D.comp.full <- loo_compare(D.M0,
+            D.M1,
+            D.M2,
+            D.M3,
+            D.M4,
+            D.M5,
+            D.M6,
+            D.full)
+
+# check the results for the MinDist full model
+summary(D.M1)
+
+## I can chose what parameters to plot in the next commnad by selecting columns
+colnames(as.matrix(D.M1))
+## Making a distribution area plot
+mcmc_areas(as.matrix(D.M1)[,2:6])
+
+# extract the loo object for the MinDist full model
+D.full.loo <- loo(D.full)
+
+
+## Latency
+L.comp.full <- loo_compare(L.M0,
+            L.M1,
+            L.M2,
+            L.M3,
+            L.M4,
+            L.M5,
+            L.M6,
+            L.full)
+
+# check the results for the MinDist full model
+summary(L.full)
+
+## I can chose what parameters to plot in the next commnad by selecting columns
+colnames(as.matrix(L.M1))
+## Making a distribution area plot
+mcmc_areas(as.matrix(L.M1)[,2:6])
+
+# extract the loo object for the MinDist full model
+L.full.loo <- loo(L.full)
+
+
+## TFAP
+F.comp.full <- loo_compare(F.M0,
+            F.M1,
+            F.M2,
+            F.M3,
+            F.M4,
+            F.M5,
+            F.M6,
+            F.full)
+
+# check the results for the MinDist full model
+summary(F.M1)
+
+## I can chose what parameters to plot in the next commnad by selecting columns
+colnames(as.matrix(F.M1))
+## Making a distribution area plot
+mcmc_areas(as.matrix(F.M1)[,2:6])
+
+# extract the loo object for the MinDist full model
+F.full.loo <- loo(F.full)
+
+
+## Aggression pca1
+P.comp.full <- loo_compare(P.M0,
+            P.M1,
+            P.M2,
+            P.M3,
+            P.M4,
+            P.M5,
+            P.M6,
+            P.full)
+
+# check the results for the MinDist full model
+summary(P.M1)
+
+# extract the loo object for the MinDist full model
+P.full.loo <- loo(P.full)
+
+
+## Plotting
+
+## Plotting
+pp_check(P.full,  ndraws=100)
+conditional_effects(P.full, surface=TRUE)
+mcmc_plot(P.full)
+plot(P.full)
+
+
+## See the colums names which are the parameters we estimated.
+## I can chose what parameters to plot in the next commnad by selecting columns
+colnames(as.matrix(P.full))
+library(bayesplot)
+## Making a distribution area plot
+mcmc_areas(as.matrix(F.full)[,2:11])
+
+# find the all possible combinations of seven elements, taken all possible number of elements
+
+
+################################################################################
+
+## Making a table with elpd_diff and SE_diff
+
+## Making a list with the loo
+mat.comp.full <- rbind(D.comp.full, L.comp.full, F.comp.full, P.comp.full)
+
+## Write table
+write.csv(mat.comp.full,  file="mat.comp.full.csv")
+
+
+############
+
+## Making a table with elpd_loo and SE
+
+## Making a list with the loo
+list.loo <- list(D.M0.loo, D.M1.loo, D.M2.loo, D.M3.loo, D.M4.loo, D.M5.loo, D.M6.loo,
+                 L.M0.loo, L.M1.loo, L.M2.loo, L.M3.loo, L.M4.loo, L.M5.loo, L.M6.loo,
+                 F.M0.loo, F.M1.loo, F.M2.loo, F.M3.loo, F.M4.loo, F.M5.loo, F.M6.loo,
+                 P.M0.loo, P.M1.loo, P.M2.loo, P.M3.loo, P.M4.loo, P.M5.loo, P.M6.loo)
+
+## Name loo list
+names(list.loo) <- c("D.M0", "D.M1", "D.M2", "D.M3", "D.M4", "D.M5", "D.M6",
+"L.M0", "L.M1", "L.M2", "L.M3", "L.M4", "L.M5", "L.M6",
+"F.M0", "F.M1", "F.M2", "F.M3", "F.M4", "F.M5", "F.M6",
+"P.M0", "P.M1", "P.M2", "P.M3", "P.M4", "P.M5", "P.M6")
+
+## Making a table
+matx.loo <- as.data.frame(t(sapply(list.loo, function(x) x$estimates[1,])))
+matx.loo$model <- names(list.loo) # column with models
+
+## Write table
+write.csv(matx.loo,  file="matx.loo.csv")
+
+
+############
+
+## Getting the percentage of Pareto-k-diagnostic greater than 0.7
+
+## Define threshold
+threshold <- 0.7
+
+## Define function to obtain percentages
+perc_gt_threshold <- function(df) {
+  sum(df>threshold) / length(df)*100
+}
+
+
+paretos.1 <- list()
+for(i in 1:length(list.loo)){
+  paretos.1[[i]] <- lapply(as.data.frame(list.loo[[i]]$diagnostics$pareto_k), perc_gt_threshold)}
+
+  paretos.k1 <- t(as.data.frame(paretos.1))
+  paretos.k1 <- cbind(paretos.k1, as.data.frame(names(list.loo)))
+  colnames(paretos.k1) <- c("k7", "Model")
+
+## Write table
+#write.csv(paretos.k1,  file="paretos.k1.csv")
+
+  
+############
+  
+## getting the number of parameters of models
+
+list.m28 <- list(D.M0, D.M1, D.M2, D.M3, D.M4, D.M5, D.M6,
+                 L.M0, L.M1, L.M2, L.M3, L.M4, L.M5, L.M6,
+                 F.M0, F.M1, F.M2, F.M3, F.M4, F.M5, F.M6,
+                 P.M0, P.M1, P.M2, P.M3, P.M4, P.M5, P.M6)  
+  
+  
+p.28 <- t(as.data.frame(lapply(list.m28, function(x) length(variables(x)))))
+row.names(p.28) <- names(list.loo)
+
+
+
+```
+
+
+##################   PLAYING WITH ADDITIONAL VARIABLES   #######################
+
+
+I tried also to see the effect of morphometry and the hybrid index. I add these
+variables to the best models in the previous part.
+
+
+```{r BMGMM for Aggression: Morphometrics and Hybrid Index}
+
+################################################################################
+## Testing the effect of morphometrics and hybrid index
+
+load('M_morpho_hindex.RData')
+
+
+DL.M3.tr.gc.gs <- add_criterion(DL.M3.tr.gc.gs, "waic")
+F.M1.mr <- add_criterion(F.M1.mr, "waic")
+F.M2.hi <- add_criterion(F.M2.hi, "waic")
+F.M3.mr.hi <- add_criterion(F.M3.mr.hi, "waic")
+DF.M1.mr <- add_criterion(DF.M1.mr, "waic")
+DF.M2.hi <- add_criterion(DF.M2.hi, "waic")
+DF.M3.mr.hi <- add_criterion(DF.M3.mr.hi, "waic")
+           
+
+
+
+loo_compare(F.M1.mr, F.M2.hi, F.M3.mr.hi,  criterion="loo")
+loo_compare(DF.M1.mr, DF.M2.hi, DF.M3.mr.hi, criterion="loo")
+
+summary(F.M1.mr)
+
+pp_check(F.M1.mr,  ndraws=100)
+conditional_effects(F.M1.mr, surface=TRUE)
+mcmc_plot(F.M1.mr)
+plot(F.M3.tr.gc.gs)
+
+
+################################################################################
+
+
+```
+
+
+I didn't find any effect of the pca1 of the morphometric traits and the hybrid index
+The most likely cause of this is the reduced data set for a complex model such these.
+I decided not to include these two factors in the analysis of aggression.
+
+#### Exploratory Plotting: Discrimination of Songs
+
+```{r Exploratory Plotting: Discrimination of Songs}
+
+### Getting difference in responses to BBWR and FWR
+
+## Difference for Minimum Distance
+
+library(reshape2)
+
+## Getting the data in wide format to subtract variables between Treatment
+Discr <-  reshape(Exp.mv.clim,direction = "wide",idvar=c("GC", "Pop", "Group"), timevar = "Treatment")
+dim(Discr)
+head(Discr)
+colnames(Discr)
+
+  
+Discr2 <- cbind(Discr, Discr$MinDist_sc.BBWR - Discr$MinDist_sc.FWR)
+Discr2 <- cbind(Discr2, Discr$Latency_sc.BBWR - Discr$Latency_sc.FWR)
+Discr2 <- cbind(Discr2, Discr$TFAP_sc.BBWR - Discr$TFAP_sc.FWR)
+Discr2 <- cbind(Discr2, Discr$pca1.BBWR - Discr$pca1.FWR)
+Discr2 <- Discr2[,c(1:3,26:29)]
+colnames(Discr2) <- c("Group", "Site", "Pop", "D.Dist", "Latency", "TFAP", "PC1")
+
+
+## Plotting Discrimination per Site
+pd = position_dodge(.2)
+plot.discr.dist.site <- ggplot(Discr2, aes(x=factor(Site, level=site_order), y=D.Dist)) +
+    geom_boxplot()+
+    theme_bw() +
+    ggtitle("Difference of Minimum Distance Between BBWR and FWR Treatments Per Site") +
+    theme(axis.title = element_text(face = "bold")) +
+    ylab("Discrimination (Minimum Distance)")+
+    geom_hline(yintercept=0, linetype="dashed", color = "red", size=0.5) +
+    annotate(geom="text", x=2, y=30, label="Closer to FWR", color="blue") +
+    annotate(geom="text", x=11, y=-8, label="Closer to BBWR", color="red")
+
+
+## Plotting Discrimination per Population
+plot.discr.dist.pop <- ggplot(Discr2, aes(x=factor(Pop, level=gc_order), y=TFAP)) +
+    geom_boxplot()+
+    theme_bw() +
+    ggtitle("Discrimination Per Population") +
+    theme(axis.title = element_text(face = "bold")) +
+    ylab("Discrimination (TFAP)")+
+    geom_hline(yintercept=0, linetype="dashed", color = "red", size=0.5) +
+    annotate(geom="text", x=1, y=6, label="Closer to FWR", color="blue") +
+    annotate(geom="text", x=3.2, y=-5, label="Closer to BBWR", color="red")
+
+
+```
+
+
+#### Saving
+
+```{r Saving}
+
+save.image('Exp4.RData')
+
+```
+
+#### 
+ 
+
+  
+
+
+

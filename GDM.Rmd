@@ -1,0 +1,796 @@
+---
+title: "Aggression Interference with GDM"
+author: "Daniel Montalvo"
+date: "5/2/2022"
+output: output=github_document
+---
+
+<center>
+
+<h1>Exploratory Analysis for Playback Expriments</h1>
+
+</center>
+
+<center>
+
+<h2>Luis Daniel Montalvo</h2>
+
+</center>
+
+### Introduction
+
+Here, I am analyzing data from playback experiments carried out in 2018 to study aggressive interference using SEM.
+
+```{r setup, include=FALSE}
+
+rm(list=ls())
+
+setwd("C:/Users/Daniel/Dropbox/Thesis/Aggressive Behavior/R")
+
+load("GDM_data.RData")
+load("GDM_out.RData")
+
+```
+
+#### Reading the data
+
+```{r Reading Files and General Data Management, echo=FALSE}
+
+## Reading the original data for the experiments
+Exp.raw <- read.csv("Data.csv", sep=",", header=TRUE, stringsAsFactors = FALSE)
+Exp.raw$Dist <- as.numeric(as.character(Exp.raw$Dist))
+
+View(Exp.raw)
+
+## Getting rid of others species other than wrens
+Exp.wrens <- subset(Exp.raw,Exp.raw$Species == "BBWR" |
+                      Exp.raw$Species == "FWR" |
+                      Exp.raw$Species == "BBxFWR")
+
+## Reading data for the description of experiments (metadata)
+Meta.exp.raw <- read.csv("Exp.csv", sep=",", header=TRUE, as.is=T)
+
+## Merging the experiments data and the metadata of the experiments
+Exp.meta<-merge(Exp.wrens, Meta.exp.raw, by=c("Exp"))
+
+View(Exp.meta)
+
+## Getting the times in seconds as numeric
+Exp.meta$Sec <- as.numeric(Exp.meta$Sec)
+
+## Adding the a variable for the seconds that passed to the first FAP 
+## The experiment last 3 min, but the time was recorded backwards, 
+## so we rest 180 (3 mins) to make time forward.
+## Exp.meta$Timing_sec2 <- 180 - Exp.meta$Timing_sec
+
+## Installing necessary packages
+install.packages("tidyverse")
+library(tidyverse)
+
+## Filtering only data in the time of the treatments
+Exp.treat.filtered <- subset(Exp.meta, Exp.meta$Treatment == "BBWR" | 
+                                       Exp.meta$Treatment == "FWR" |
+                                       Exp.meta$Treatment == "Control")
+
+## I also add environmental data below and it is explained with more detail
+## Reading the data with spatial data (coor and precipitation)
+env <- read.csv("Env.csv", sep=",", header=TRUE, as.is = T)
+
+## I also add genetic data below, including data form structure and hybrid index
+## Reading the data with spatial data and Genetic Cluster from Structure Analysis
+gen.spatial <- read.csv("k4popfile.txt", sep="\t", header=TRUE, as.is = T)
+
+
+### All data: Both treatments ####
+
+## Merging all data
+Exp.all2 <- merge(Exp.treat.filtered, env, by=c("Group"))
+
+## Reading the descriptions of FAPs. We want to get rid of the non Aggressive FAPs
+faps <- read.csv("fap.csv", sep=",", header=TRUE, stringsAsFactors = FALSE)
+
+## Adding the information of FAPs categories
+Exp.all2 <- merge(Exp.all2, faps[,c(1,3)], all.x=TRUE,  by.x="FAP", by.y="Code")
+
+## Removing the rows with no Aggressive Behaviors
+Exp.all2 <- Exp.all2[!grepl("No aggressive", Exp.all2$Category),]
+
+
+## Since the response of the birds were in group, we use it as a unit or sample for 
+## presenting the results. We create a unique code for Experiment, Group and Treatment
+Exp.all2$Cod_sam <- paste(Exp.all2$Group, Exp.all2$Exp, Exp.all2$Treatment, sep=".")
+
+## Extracting only rows with the shortest distance reached in the treatment
+library(dplyr)
+Exp.min <- Exp.all2 %>% 
+  group_by(Pop, Group, Treatment, Cod_sam) %>%
+  slice(which.min(Dist))
+
+## We also use total (abundance) and unique (richness) number of FAPs
+Exp.fap <- Exp.all2 %>%
+  dplyr::group_by(Pop, Group, Treatment, Cod_sam) %>%
+  dplyr::summarise(TFAP=length(FAP), 
+            NFAP=length(unique(FAP)))
+
+
+######################      MASTER DATAFRAME      ##############################
+## Merging the FAPs variables and the distance and latency in the same dataframe
+Exp.codes <- merge(Exp.min, Exp.fap, by="Cod_sam")
+Exp.codes$Timing_sec <- as.numeric(Exp.codes$Timing_sec)
+################################################################################
+
+
+## Combining populations
+
+## Copying the dataframe
+Exp.gc <- Exp.codes
+
+## Sites belonging to Genetic Populations
+CZ <- c("Patricia Pilar", "Las Golondrinas", "Pedro Carbo", "PVM", "Chone")
+CFP_N <- c("Calceta", "Montecristi", "Machalilla", "Manglares Churute")
+CFP_S <- c("Arenillas", "Zapotillo", "Cazaderos")
+
+
+## Sampling sites for CZ have CZ in column Pop
+for(i in 1:length(CZ)){
+Exp.gc$GC[Exp.gc$Pop.x == CZ[i]] <- "CZ"}
+
+
+## Sampling sites for CFP_N have CFP_N in column Pop
+for(i in 1:length(CFP_N)){
+Exp.gc$GC[Exp.gc$Pop.x == CFP_N[i]] <- "CFP_N"}
+
+
+## Sampling sites for CFP_S have CFP_S in column Pop
+for(i in 1:length(CFP_S)){
+Exp.gc$GC[Exp.gc$Pop.x == CFP_S[i]] <- "CFP_S"}
+
+
+## Creating an order for Genetic Population
+gc_order <- c("CZ", "CFP_N", "CFP_S")
+
+## Order of Populations
+Exp.gc$GC <- factor(Exp.gc$GC, levels=gc_order)
+
+
+```
+
+#### Combining Populations into Genetics Populations
+
+Splitting the data into sites and even more in groups lead to high variation
+of data and ob
+scure the patterns. This is why I decided to pull all the groups by
+the genetic groups identified by my first chapter.
+
+#### Working with Environmental Variables
+
+```{r Getting the Environmental Variables, echo=FALSE}
+
+################################################################################
+
+## Spatial Analysis Packages
+#install.packages(c("spdep", "sp", "raster","rgdal","ClimDatDownloadR", "rgeos", "envirem"), dependencies=TRUE)
+
+## Statistical Packages
+install.packages(c("Hmisc","PerformanceAnalytics"), dependencies=TRUE)
+install.packages("Hmisc")
+
+
+library(envirem) # Have to be called first to avoid conflict with raster packages
+library(spdep)
+library(raster)
+library(rgdal)
+library(ClimDatDownloadR)
+library(rgeos)
+library(sp)
+library(Hmisc)
+library(PerformanceAnalytics)
+
+View(env)
+
+## Getting name of groups and coodinates
+gr.coor <- env[,c("Group", "Lat", "Long")]
+
+## Making the coordinates numeric
+coor <- cbind(as.numeric(as.character(gr.coor$Long)), as.numeric(as.character(gr.coor$Lat)))
+
+## Setting the coordinates system as Long/Lat
+cord.dec = SpatialPoints(cbind(coor[,1], coor[,2]), proj4string=CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84"))
+
+
+## Most of this code came from http://envirem.github.io/ENVIREM_tutorial.html
+## I don't to run Chelsa.Clim.download because I already did it. Below is the path 
+## Where the raster are
+Chelsa.Clim.download(parameter = "bio",
+                     bio.var =  c(1:19), 
+                     version.var = "1.2", 
+                     clipping = FALSE, 
+                     clip.extent = c(-81.5, -77.6, -7, 1.5), 
+                     buffer = 0, 
+                     convert.files.to.asc = FALSE, 
+                     stacking.data = TRUE, 
+                     combine.raw.zip = FALSE,
+                     delete.raw.data = FALSE,
+                     save.bib.file = TRUE)
+
+
+## Setting the directory where the clipped raster was saved
+wd <- ("C:\\Users\\Daniel\\Dropbox\\Thesis\\Molecular_Wrens\\Radseq\\IBE\\bio\\bio_V1.2\\clipped\\")
+
+## Creating a list with the names of all raster files 
+list.raster <- list.files(wd, full.names = TRUE)
+
+## Reading and stacking the rasters
+stack.ch <- stack(list.raster[1:19])
+
+## Extracting the values for the sampling points I have
+values.ch <- raster::extract(stack.ch, cord.dec)
+
+## Naming the columns
+colnames(values.ch) <- c("AMT","MDR","ISO","TS","MTWM","MTCM","TAR","MTWetQ","MTDQ","MTWarQ","MTCQ","AMP","PWetM","PDM","PS","PWetQ","PDQ","PWarQ","PCQ")
+
+## Merging the coordinates, Chelsa values, population labels
+coor.clim.raw.ch <- cbind.data.frame(coordinates(coor), values.ch)
+colnames(coor.clim.raw.ch)[1:2] <- c("Long", "Lat")
+coor.clim.raw.ch <- cbind(gr.coor, coor.clim.raw.ch)
+
+View(coor.clim.raw.ch)
+################################################################################
+
+## Getting NDVI
+
+install.packages("MODISTools")
+library(MODISTools)
+
+## View Variables we could use
+View(mt_products())
+View(mt_bands(product = "ECO4ESIPTJPL"))
+View(mt_dates(product = "MOD13Q1", lat=coor[1,2], lon=coor[1,1]))
+
+
+## Products
+    # Bands
+
+## MOD13Q1: MODIS/Aqua Vegetation Indices (NDVI/EVI) 16-Day L3 Global 250m SIN Grid
+    # 250m_16_days_EVI
+    # 250m_16_days_NDVI
+
+## MOD15A2H: MODIS/Terra Leaf Area Index/FPAR (LAI/FPAR) 8-Day L4 Global 500 m SIN Grid
+    # Lai_500m
+
+## ECO4ESIPTJPL: ECOSTRESS Evaporative Stress Index PT-JPL (ESI) Daily L4 Global 70 m
+    # ESIavg
+    # PET
+
+## Getting the coordinates data frame in the right format for the app
+coor.mt <- gr.coor
+colnames(coor.mt) <- c("site_name", "lat", "lon")
+
+## Running MODISTools to get EVI
+evi_raw <- mt_batch_subset(df=coor.mt, product="MOD13Q1",
+                           band="250m_16_days_EVI",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19")
+
+ndvi_raw <- mt_batch_subset(df=coor.mt, product="MOD13Q1",
+                           band="250m_16_days_NDVI",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19")
+
+lai_raw <- mt_batch_subset(df=coor.mt, product="MOD15A2H",
+                           band="Lai_500m",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19")  
+
+esi_raw <- mt_batch_subset(df=coor.mt, product="ECO4ESIPTJPL",
+                           band="ESIavg",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19") 
+
+pet_raw <- mt_batch_subset(df=coor.mt, product="ECO4ESIPTJPL",
+                           band="PET",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19")                  
+
+detach(package:plyr)# sometimes plyr package don't let summarise to work
+
+## Getting a summary
+library(plyr)
+
+## Checking data
+View(head(evi_raw))
+
+## Getting the mean, sd and min of EVI
+evi_sum <- evi_raw %>%
+  dplyr::group_by(site) %>%
+  dplyr::summarise(evi = mean(value, na.rm=TRUE),
+            evi_sd = sd(value, na.rm=TRUE),
+            evi_min = min(value, na.rm=TRUE))
+
+## Getting the mean, sd and min of NDVI
+ndvi_sum <- ndvi_raw %>%
+  dplyr::group_by(site) %>%
+  dplyr::summarise(ndvi = mean(value, na.rm=TRUE),
+            ndvi_sd = sd(value, na.rm=TRUE),
+            ndvi_min = min(value, na.rm=TRUE))
+
+## Getting the mean, sd and min of LAI
+lai_sum <- lai_raw %>%
+  dplyr::group_by(site) %>%
+  dplyr::summarise(lai = mean(value, na.rm=TRUE),
+            lai_sd = sd(value, na.rm=TRUE),
+            lai_min = min(value, na.rm=TRUE))
+
+## Merging the data frames
+veg_sum <- merge(evi_sum, ndvi_sum, by="site")
+veg_sum <- merge(veg_sum, lai_sum, by="site")
+
+## Check data
+View(veg_sum)
+
+##### Getting reduced columns
+IV.ch <- coor.clim.raw.ch[,c(1,6,17,20)]
+
+## Merging group name and climate
+gr.iv <- merge(env[,c("Group", "Pop", "Lat", "Long", "Alt")], IV.ch, by="Group")
+colnames(gr.iv)[1:2] <- c("Group", "Pop")
+
+## Merging the climate and evi variables
+gr.iv <- merge(gr.iv, veg_sum, by.x="Group", by.y="site", all.x=TRUE)
+
+## Merging genetic spatial and climate
+pop.order <- merge(gen.spatial, gr.iv, by=c("Group"))
+
+## Ordering by Latitude
+pop.order <- pop.order[order(-pop.order$AMP),]
+
+## Sites order
+site_order_clim <- unique(pop.order$Pop.y)
+
+## Merging all data of aggression variables and climate
+Exp.all.clim <- merge(Exp.gc, gr.iv, by.x="Group.x", by.y="Group")
+
+## Deleting rows for Exp PB028. There was two Exp for this group
+## I'm deleting the first one.
+Exp.all.clim <- Exp.all.clim[!grepl("PB028", Exp.all.clim$Exp),]
+
+dim(Exp.all.clim)
+
+######################      MASTER DATAFRAME      ##############################            
+## join Number of individuals in Exp and variables
+colnames(Exp.all.clim)[c(1,5)] <- c("Group", "Treatment")
+
+## Reading data for the description of experiments (metadata)
+Meta.exp.raw <- read.csv("Exp.csv", sep=",", header=TRUE, as.is=T)
+
+## Adding the meta info to the data
+Exp.all.clim <- merge(Exp.all.clim, Meta.exp.raw, by="Group")
+
+dim(Exp.all.clim)
+
+#################################################################################
+
+colnames(Exp.all.clim)
+
+## Making GC a dummy variable
+Exp.all.clim$GC_d <- ifelse(Exp.all.clim$GC == "CZ", 1, 
+ifelse(Exp.all.clim$GC == "CFP_N", 2, 3))
+
+## Making Treatment a dummy variable
+Exp.all.clim$Treatment_d <- ifelse(Exp.all.clim$Treatment == "BBWR", 1, 0)
+
+## Inv has NA in it, changing to one, we assume there was at least one individual responding.
+## These was speially in BBWR where I found single individuals
+Exp.all.clim$Inv[is.na(Exp.all.clim$Inv)] <- 1
+
+## Scaling the variables
+Exp.all.clim$Dist_sc <- scale(Exp.all.clim$Dist, center = TRUE)
+Exp.all.clim$Timing_sec_sc <- scale(Exp.all.clim$Timing_sec)
+Exp.all.clim$TFAP_sc <- scale(Exp.all.clim$TFAP)
+Exp.all.clim$AMT_sc <- scale(Exp.all.clim$AMT)
+Exp.all.clim$AMP_sc <- scale(Exp.all.clim$AMP)
+Exp.all.clim$PS_sc <- scale(Exp.all.clim$PS)
+Exp.all.clim$Lat_sc <- scale(Exp.all.clim$Lat.x)
+Exp.all.clim$Long_sc <- scale(Exp.all.clim$Long.x)
+Exp.all.clim$evi_sd_sc <- scale(Exp.all.clim$evi_sd.x)
+Exp.all.clim$evi_sc <- scale(Exp.all.clim$evi.x)
+Exp.all.clim$evi_min_sc <- scale(Exp.all.clim$evi_min.x)
+Exp.all.clim$ndvi_sc <- scale(Exp.all.clim$ndvi)
+Exp.all.clim$ndvi_sd_sc <- scale(Exp.all.clim$ndvi_sd)
+Exp.all.clim$ndvi_min_sc <- scale(Exp.all.clim$ndvi_min)
+Exp.all.clim$lai_sc <- scale(Exp.all.clim$lai)
+Exp.all.clim$lai_sd_sc <- scale(Exp.all.clim$lai_sd)
+Exp.all.clim$lai_min_sc <- scale(Exp.all.clim$lai_min)
+Exp.all.clim$Inv_sc <- as.vector(scale(Exp.all.clim$Inv))
+
+
+## Make variables greater than zero to adjust to dexp
+Exp.all.clim$TFAP_pos <- Exp.all.clim$TFAP_sc + abs(min(Exp.all.clim$TFAP_sc, na.rm=TRUE)) + 1
+Exp.all.clim$Dist_pos <- Exp.all.clim$Dist_sc + abs(min(Exp.all.clim$Dist_sc, na.rm=TRUE)) + 1
+Exp.all.clim$Latency_pos <- Exp.all.clim$Timing_sec_sc + abs(min(Exp.all.clim$Timing_sec_sc, na.rm=TRUE)) + 1
+
+# replace NA with zeros in the data
+Exp.all.clim$Latency_pos[is.na(Exp.all.clim$Latency_pos)] <- 0.1
+
+dim(Exp.all.clim)
+colnames(Exp.all.clim)
+View(Exp.all.clim)
+
+#################################################################################
+## Adding plant diversity data
+
+## Path to the raster files
+path.plRich <- "C:/Users/Daniel/Dropbox/Thesis/Aggressive Behavior/R/3506_70_Dataset/"
+
+library(raster)
+
+## Read the raster w3_tile_joint_sr1000.tif at path.plRich
+r <- raster(paste0(path.plRich, "w3_tile_joint_sr1000.tif"))
+
+## Extract values of r using cord.dec
+values.r <- raster::extract(r, cord.dec)
+
+## Adding group name to the raster values
+values.r <- cbind(gr.coor, values.r)
+
+View(values.r)
+
+## Merging group name and climate
+Exp.all.clim <- merge(Exp.all.clim, values.r, by="Group")
+
+colnames(Exp.all.clim)
+
+## scale plant richness
+Exp.all.clim$Rich_sc <- as.vector(scale(Exp.all.clim$values.r))
+
+#################################################################################
+
+## Get loading of PCA for primary productivity
+
+colnames(Exp.all.clim)
+prod.var <- c("evi", "lai", "ndvi")
+
+## Getting the PCA
+pca.veg <- prcomp(Exp.all.clim[,prod.var], scale=TRUE)
+summary(pca.veg)
+
+## getting the first pc1
+Exp.all.clim$pca.veg1 <- pca.veg$x[,1]
+
+## Getting the second pc2
+Exp.all.clim$pca.veg2 <- pca.veg$x[,2]
+
+## PCA with climate variables
+pca.clim.var <- c("AMT", "AMP", "PS")
+
+## Getting the PCA
+pca.clim <- prcomp(Exp.all.clim[,pca.clim.var], scale=TRUE)
+summary(pca.clim)
+
+## getting the first pc1
+Exp.all.clim$pca.clim1 <- pca.clim$x[,1]
+
+## Getting the second pc2
+Exp.all.clim$pca.clim2 <- pca.clim$x[,2]
+
+```
+
+## DEFINITIONS OF PRIMARY PRODUCTIVITY VARIABLES
+
+Landsat Enhanced Vegetation Index (EVI) is similar to Normalized Difference Vegetation Index (NDVI) 
+and can be used to quantify vegetation greenness. However, EVI corrects for some atmospheric conditions
+ and canopy background noise and is more sensitive in areas with dense vegetation.
+
+The NDVI index detects and quantifies the presence of live green vegetation using this reflected light 
+in the visible and near-infrared bands. Put simply, NDVI is an indicator of the vegetation 
+greenness —the density and health—of each pixel in a satellite image.
+
+LAI is defined as the one-sided green leaf area per unit ground area in broadleaf canopies and as 
+one-half the total needle surface area per unit ground area in coniferous canopies.
+
+The ESI is an indicator of potential drought and plant water stress emphasizing areas of sub-optimal plant productivity.
+The ESI product is derived from the ratio of the Level 3 actual evapotranspiration (ET) to potential ET (PET) 
+calculated as part of the algorithm. The ESI is an indicator of potential drought and plant water stress. 
+emphasizing areas of sub-optimal plant productivity.
+
+
+#### Testing Normality for response variables
+
+```{r Testing Normality}
+
+## Exploring Normality ####
+
+## Intalling ggpbur for nice plots
+install.packages("ggpubr")
+library(ggpubr)
+
+## With Minimum Distance
+ggdensity(Exp.all.clim$Dist)
+ggdensity(scale(Exp.all.clim$Dist))
+
+ggqqplot(Exp.all.clim$Dist)
+shapiro.test(Exp.all.clim$Dist)
+
+ggqqplot(log(Exp.all.clim$Dist+1))
+ggdensity(log(Exp.all.clim$Dist+1))
+shapiro.test(log(Exp.all.clim$Dist+1))
+
+ggqqplot(sqrt(Exp.all.clim$Dist_sc+1))
+shapiro.test(sqrt(Exp.all.clim$Dist+1))
+
+ggqqplot(sqrt((max(Exp.all.clim$Dist+1)+1)-(Exp.all.clim$Dist+1)))
+shapiro.test(sqrt((max(Exp.all.clim$Dist+1)+1)-(Exp.all.clim$Dist+1)))
+
+ggqqplot(exp(Exp.all.clim$Dist_sc+1))
+shapiro.test(exp(Exp.all.clim$Dist+1))
+
+ggqqplot(1/max(Exp.all.clim$Dist_sc+1)^2+1)
+shapiro.test(exp(Exp.all.clim$Dist+1))
+
+## With Latency
+ggdensity(Exp.all.clim$Timing_sec)
+ggdensity(scale(Exp.all.clim$Dist))
+
+ggqqplot(Exp.all.clim$Dist)
+shapiro.test(Exp.all.clim$Dist)
+
+ggqqplot(log(Exp.all.clim$Dist+1))
+shapiro.test(log(Exp.all.clim$Dist+1))
+
+ggqqplot(sqrt(Exp.all.clim$Dist))
+shapiro.test(sqrt(Exp.all.clim$Dist))
+
+## With TFAP
+ggdensity(Exp.gc$TFAP)
+ggdensity(scale(Exp.gc$TFAP))
+
+ggqqplot(Exp.gc$TFAP)
+shapiro.test(Exp.gc$TFAP)
+
+ggqqplot(Exp.mv.clim$MinDist_sc)
+ggqqplot(Exp.mv.clim$Latency_sc)
+ggqqplot(Exp.mv.clim$TFAP_sc)
+shapiro.test(Exp.mv.clim$TFAP_sc)
+
+plot(density(Exp.mv.clim$MinDist_sc))
+plot(density(Exp.mv.clim$Latency_sc))
+plot(density(Exp.mv.clim$TFAP_sc))
+plot(density(Exp.mv.clim$pca1))
+plot(density(Exp.mv.clim$pca2))
+
+hist(Exp.mv.clim$MinDist_sc, breaks=10)
+hist(Exp.mv.clim$Latency_sc, breaks=10)
+hist(Exp.mv.clim$TFAP_sc, breaks=10)
+
+ggdensity(dexp(Exp.all.clim$Dist_sc, 1))
+ggdensity(Exp.all.clim$Dist_sc)
+
+
+mean(abs(Exp.all.clim$Dist_sc))
+dexp(Exp.all.clim$Dist_sc,1)
+dexp(-0.5,1)
+
+```
+None of the variables follow a normal distribution
+
+
+```{r GDM models}
+
+##  REmove Observation.y from Exp.all.clim
+Exp.all.clim <- Exp.all.clim[,c(1:33, 35:ncol(Exp.all.clim))]
+
+## Getting the variables for the GDM
+Exp.mv.clim <- Exp.all.clim %>%
+  dplyr::group_by(Group) %>%
+  dplyr::summarise(MinDist1=min(Dist, na.rm=TRUE),
+            Latency1=mean(Timing_sec, na.rm=TRUE),
+            TFAP1=sum(TFAP, na.rm=TRUE),
+            AMT1=mean(AMT, na.rm=TRUE),
+            AMP1=mean(AMP, na.rm=TRUE),
+            PS1=mean(PS, na.rm=TRUE),
+            Lat1=mean(Lat, na.rm=TRUE),
+            Long1=mean(Long, na.rm=TRUE),
+            evi1=mean(evi, na.rm=TRUE),
+            evi_min1=min(evi_min, na.rm=TRUE),
+            ndvi1=mean(ndvi, na.rm=TRUE),
+            ndvi_min1=min(ndvi_min, na.rm=TRUE),
+            lai1=mean(lai, na.rm=TRUE),
+            lai_min1=min(lai_min, na.rm=TRUE),
+            Inv1=mean(Inv, na.rm=TRUE),
+            Rich1=mean(values.r, na.rm=TRUE),
+            pca.veg11=mean(pca.veg1, na.rm=TRUE),
+            pca.veg12=mean(pca.veg2, na.rm=TRUE),
+            pca.clim11=mean(pca.clim1, na.rm=TRUE),
+            pca.clim12=mean(pca.clim2, na.rm=TRUE))
+
+## Remove the ones from colnames in  EXp.mv.clim
+colnames(Exp.mv.clim)[c(2:21)] <- c("MinDist", 
+"Latency", 
+"TFAP", 
+"AMT", 
+"AMP", 
+"PS", 
+"y", 
+"x", 
+"evi", 
+"evi_min", 
+"ndvi", 
+"ndvi_min", 
+"lai", 
+"lai_min", 
+"Inv", 
+"Rich", 
+"pca.veg1", 
+"pca.veg2", 
+"pca.clim1", 
+"pca.clim2")
+
+## Order Exp.mv.clim by GRoup
+Exp.mv.clim <- Exp.mv.clim[order(Exp.mv.clim$Group),]
+
+## Get the variable with pca
+Exp.gdm.pred <- as.data.frame(Exp.mv.clim[,c("Group", "x", "y", "pca.veg1", "pca.veg2", "pca.clim1", "pca.clim2")])
+dim(Exp.gdm.pred)
+head(Exp.gdm.pred)
+
+## Get the variable without pca
+Exp.gdm.pred2 <- as.data.frame(Exp.mv.clim[,c("Group", "x", "y", "AMT", "AMP", "PS", "pca.veg1", "pca.veg2")])
+dim(Exp.gdm.pred2)
+head(Exp.gdm.pred2)
+
+
+#################################################################################
+
+library(vegan)
+
+## Get distance matrix for TFAP
+TFAP.dist <- as.matrix(vegdist(Exp.mv.clim$TFAP, "bray", na.rm = TRUE))
+TFAP.dist <- cbind(Exp.mv.clim$Group, TFAP.dist)
+
+## Putting names
+colnames(TFAP.dist) <- c("Group", Exp.mv.clim$Group)
+rownames(TFAP.dist) <- c(Exp.mv.clim$Group)
+
+## Convert values in TFAP to ones and 
+
+## Checking data
+View(TFAP.dist)
+dim(TFAP.dist)
+head(TFAP.dist)
+class(TFAP.dist)
+
+## Installing gdm package
+install.packages("gdm")
+library(gdm)
+
+# Getting the data in format for GDM using the fuction formatsitepair
+gdm.tfap.pca <- formatsitepair(bioData = TFAP.dist, bioFormat=3, siteColumn="Group", 
+                            XColumn="x", YColumn="y", dist="euclidian", predData=Exp.gdm.pred)
+
+head(gdm.tfap.pca)
+
+# Getting the data in format for GDM using the fuction formatsitepair
+gdm.tfap.var <- formatsitepair(bioData = TFAP.dist, bioFormat=3, siteColumn="Group", 
+                            XColumn="x", YColumn="y", dist="euclidian", predData=Exp.gdm.pred2)
+
+head(gdm.tfap.pca)
+
+#################################################################################
+
+## Get distance matrix for MinDist
+
+## Getting the distance matrix
+MinDist.dist <- as.matrix(vegdist(Exp.mv.clim$MinDist, "bray", na.rm = TRUE))
+MinDist.dist <- cbind(Exp.mv.clim$Group, MinDist.dist)
+
+## Putting names
+colnames(MinDist.dist) <- c("Group", Exp.mv.clim$Group)
+rownames(MinDist.dist) <- c(Exp.mv.clim$Group)
+
+## Checking data
+View(MinDist.dist)
+dim(MinDist.dist)
+head(MinDist.dist)
+class(MinDist.dist)
+
+# Getting the data in format for GDM using the fuction formatsitepair
+gdm.mindist.pca <- formatsitepair(bioData = MinDist.dist, bioFormat=3, siteColumn="Group", 
+                            XColumn="x", YColumn="y", dist="euclidian", predData=Exp.gdm.pred)
+
+head(gdm.mindist.pca)
+
+#################################################################################
+
+
+# Running the GDM
+gdm.m1 <- gdm(data=gdm.tfap.pca, geo=TRUE)
+
+## Checking the model
+summary(gdm.m1)
+plot(gdm.m1, plot.layout=c(2,3))
+
+## Running the GDM
+gdm.m2 <- gdm(data=gdm.tfap.var, geo=TRUE)
+
+## Checking the model
+summary(gdm.m2)
+plot(gdm.m2, plot.layout=c(3,4))
+
+# Gettign variables importance
+modTest <- gdm.varImp(gdm.tfap.pca, geo=TRUE, predSelect=TRUE, nPerm=10000, cores=10)
+
+# Get percentages of variance explained by each predictor
+# How to get the percentage of a percentage
+
+(modTest[[2]]*100)/sum(modTest[[2]])
+
+# Partition variance by component environment and geography
+# Make list of variable sets for partitioning
+varSet <- vector("list",3)
+names(varSet) <- c("pca.veg1", "pca.clim1", "ps")
+
+varSet$temp <- c("AMT")
+varSet$amp <- c("AMP")
+varSet$ps <- c("PS")
+
+varSet
+
+# run the function to partition temperature, precipitation, and space (partSpace=TRUE)
+scgPart <- gdm.partition.deviance(sitePairTable=gdm.wrens, varSets=varSet, partSpace=FALSE)
+
+?gdm.partition.deviance
+
+```
+
+
+
+
+```{r SEM}
+
+## Required libraries
+library(blavaan)
+library(semPlot)
+
+m.tfap.full <- '
+# TFAP
+# Regression-Structural model
+TFAP ~ pca.veg1 + pca.clim1 + Inv_sc
+
+# Mediator
+pca.veg1 ~ pca.clim1
+
+# Covariances
+'
+
+# Fitting hte model
+out.tfap.full <- bsem(m.tfap.full, data=data_pos.jag)
+
+## Summary Results
+summary(out.tfap.full, fit.measures=TRUE)
+
+
+```
+
+
+
+#### Saving
+
+```{r Saving}
+
+save.image('GDM_data.RData')
+save.image('GDM_out.RData')
+
+```
+
+#### 
+ 
+
+  
+
+
+
