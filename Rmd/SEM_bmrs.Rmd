@@ -1,0 +1,2268 @@
+---
+title: "Aggression Interference with SEM and PCA"
+author: "Daniel Montalvo"
+date: "5/2/2022"
+output: output=github_document
+---
+
+<center>
+
+<h1>Exploratory Analysis for Playback Expriments</h1>
+
+</center>
+
+<center>
+
+<h2>Luis Daniel Montalvo</h2>
+
+</center>
+
+### Introduction
+
+Here, I am analyzing data from playback experiments carried out in 2018 to study aggressive interference using SEM.
+
+```{r setup, include=FALSE}
+
+rm(list=ls())
+
+setwd("C:/Users/Daniel/Dropbox/Thesis/AggressiveBehavior/R")
+setwd("C:/Users/USER/Dropbox/Thesis/AggressiveBehavior/R")
+
+load("GDM_brms2.RData")
+
+```
+
+#### Reading the data
+
+```{r Reading Files and General Data Management, echo=FALSE}
+
+## Reading the original data for the experiments
+Exp.raw <- read.csv("Data.csv", sep=",", header=TRUE, stringsAsFactors = FALSE)
+Exp.raw$Dist <- as.numeric(as.character(Exp.raw$Dist))
+
+View(Exp.raw)
+
+## Getting rid of others species other than wrens
+Exp.wrens <- subset(Exp.raw,Exp.raw$Species == "BBWR" |
+                      Exp.raw$Species == "FWR" |
+                      Exp.raw$Species == "BBxFWR")
+
+## Reading data for the description of experiments (metadata)
+Meta.exp.raw <- read.csv("Exp.csv", sep=",", header=TRUE, as.is=T)
+
+## Merging the experiments data and the metadata of the experiments
+Exp.meta<-merge(Exp.wrens, Meta.exp.raw, by=c("Exp"))
+
+View(Exp.meta)
+
+## Getting the times in seconds as numeric
+Exp.meta$Sec <- as.numeric(Exp.meta$Sec)
+
+## Adding the a variable for the seconds that passed to the first FAP 
+## The experiment last 3 min, but the time was recorded backwards, 
+## so we rest 180 (3 mins) to make time forward.
+## Exp.meta$Timing_sec2 <- 180 - Exp.meta$Timing_sec
+
+## Installing necessary packages
+install.packages("tidyverse")
+library(tidyverse)
+
+## Filtering only data in the time of the treatments
+Exp.treat.filtered <- subset(Exp.meta, Exp.meta$Treatment == "BBWR" | 
+                                       Exp.meta$Treatment == "FWR" |
+                                       Exp.meta$Treatment == "Control")
+
+## I also add environmental data below and it is explained with more detail
+## Reading the data with spatial data (coor and precipitation)
+env <- read.csv("Env.csv", sep=",", header=TRUE, as.is = T)
+
+## I also add genetic data below, including data form structure and hybrid index
+## Reading the data with spatial data and Genetic Cluster from Structure Analysis
+gen.spatial <- read.csv("k4popfile.txt", sep="\t", header=TRUE, as.is = T)
+
+
+### All data: Both treatments ####
+
+## Merging all data
+Exp.all2 <- merge(Exp.treat.filtered, env, by=c("Group"))
+
+## Reading the descriptions of FAPs. We want to get rid of the non Aggressive FAPs
+faps <- read.csv("fap.csv", sep=",", header=TRUE, stringsAsFactors = FALSE)
+
+## Adding the information of FAPs categories
+Exp.all2 <- merge(Exp.all2, faps[,c(1,3)], all.x=TRUE,  by.x="FAP", by.y="Code")
+
+## Removing the rows with no Aggressive Behaviors
+Exp.all2 <- Exp.all2[!grepl("No aggressive", Exp.all2$Category),]
+
+
+## Since the response of the birds were in group, we use it as a unit or sample for 
+## presenting the results. We create a unique code for Experiment, Group and Treatment
+Exp.all2$Cod_sam <- paste(Exp.all2$Group, Exp.all2$Exp, Exp.all2$Treatment, sep=".")
+
+## Extracting only rows with the shortest distance reached in the treatment
+library(dplyr)
+Exp.min <- Exp.all2 %>% 
+  group_by(Pop, Group, Treatment, Cod_sam) %>%
+  slice(which.min(Dist))
+
+## We also use total (abundance) and unique (richness) number of FAPs
+Exp.fap <- Exp.all2 %>%
+  dplyr::group_by(Pop, Group, Treatment, Cod_sam) %>%
+  dplyr::summarise(TFAP=length(FAP), 
+            NFAP=length(unique(FAP)))
+
+
+######################      MASTER DATAFRAME      ##############################
+## Merging the FAPs variables and the distance and latency in the same dataframe
+Exp.codes <- merge(Exp.min, Exp.fap, by="Cod_sam")
+Exp.codes$Timing_sec <- as.numeric(Exp.codes$Timing_sec)
+################################################################################
+
+
+## Combining populations
+
+## Copying the dataframe
+Exp.gc <- Exp.codes
+
+## Sites belonging to Genetic Populations
+CZ <- c("Patricia Pilar", "Las Golondrinas", "Pedro Carbo", "PVM", "Chone")
+CFP_N <- c("Calceta", "Montecristi", "Machalilla", "Manglares Churute")
+CFP_S <- c("Arenillas", "Zapotillo", "Cazaderos")
+
+
+## Sampling sites for CZ have CZ in column Pop
+for(i in 1:length(CZ)){
+Exp.gc$GC[Exp.gc$Pop.x == CZ[i]] <- "CZ"}
+
+
+## Sampling sites for CFP_N have CFP_N in column Pop
+for(i in 1:length(CFP_N)){
+Exp.gc$GC[Exp.gc$Pop.x == CFP_N[i]] <- "CFP_N"}
+
+
+## Sampling sites for CFP_S have CFP_S in column Pop
+for(i in 1:length(CFP_S)){
+Exp.gc$GC[Exp.gc$Pop.x == CFP_S[i]] <- "CFP_S"}
+
+
+## Creating an order for Genetic Population
+gc_order <- c("CZ", "CFP_N", "CFP_S")
+
+## Order of Populations
+Exp.gc$GC <- factor(Exp.gc$GC, levels=gc_order)
+
+
+```
+
+#### Working with Environmental Variables
+
+```{r Merging Sites into GC}
+
+## Merging all data
+Exp.all2 <- merge(Exp.treat.filtered, env, by=c("Group"))
+
+## Reading the descriptions of FAPs. We want to get rid of the non Aggressive FAPs
+faps <- read.csv("fap.csv", sep=",", header=TRUE, stringsAsFactors = FALSE)
+
+## Adding the information of FAPs categories
+Exp.all2 <- merge(Exp.all2, faps[,c(1,3)], all.x=TRUE,  by.x="FAP", by.y="Code")
+
+## Removing the rows with no Aggressive Behaviors
+Exp.all2 <- Exp.all2[!grepl("No aggressive", Exp.all2$Category),]
+
+
+## Since the response of the birds were in group, we use it as a unit or sample for 
+## presenting the results. We create a unique code for Experiment, Group and Treatment
+Exp.all2$Cod_sam <- paste(Exp.all2$Group, Exp.all2$Exp, Exp.all2$Treatment, sep=".")
+
+## Extracting only rows with the shortest distance reached in the treatment
+library(dplyr)
+Exp.min <- Exp.all2 %>% 
+  group_by(Pop, Group, Treatment, Cod_sam) %>%
+  slice(which.min(Dist))
+
+## We also use total (abundance) and unique (richness) number of FAPs
+Exp.fap <- Exp.all2 %>%
+  dplyr::group_by(Pop, Group, Treatment, Cod_sam) %>%
+  dplyr::summarise(TFAP=length(FAP), 
+            NFAP=length(unique(FAP)))
+
+
+######################      MASTER DATAFRAME      ##############################
+## Merging the FAPs variables and the distance and latency in the same dataframe
+Exp.codes <- merge(Exp.min, Exp.fap, by="Cod_sam")
+Exp.codes$Timing_sec <- as.numeric(Exp.codes$Timing_sec)
+################################################################################
+
+
+## Combining populations
+
+## Copying the dataframe
+Exp.gc <- Exp.codes
+
+## Sites belonging to Genetic Populations
+CZ <- c("Patricia Pilar", "Las Golondrinas", "Pedro Carbo", "PVM", "Chone")
+CFP_N <- c("Calceta", "Montecristi", "Machalilla", "Manglares Churute")
+CFP_S <- c("Arenillas", "Zapotillo", "Cazaderos")
+
+
+## Sampling sites for CZ have CZ in column Pop
+for(i in 1:length(CZ)){
+Exp.gc$GC[Exp.gc$Pop.x == CZ[i]] <- "CZ"}
+
+
+## Sampling sites for CFP_N have CFP_N in column Pop
+for(i in 1:length(CFP_N)){
+Exp.gc$GC[Exp.gc$Pop.x == CFP_N[i]] <- "CFP_N"}
+
+
+## Sampling sites for CFP_S have CFP_S in column Pop
+for(i in 1:length(CFP_S)){
+Exp.gc$GC[Exp.gc$Pop.x == CFP_S[i]] <- "CFP_S"}
+
+
+## Creating an order for Genetic Population
+gc_order <- c("CZ", "CFP_N", "CFP_S")
+
+## Order of Populations
+Exp.gc$GC <- factor(Exp.gc$GC, levels=gc_order)
+
+```
+
+```{r Getting the Environmental Variables, echo=FALSE}
+
+################################################################################
+
+## Spatial Analysis Packages
+#install.packages(c("spdep", "sp", "raster","rgdal","ClimDatDownloadR", "rgeos", "envirem"), dependencies=TRUE)
+
+## Statistical Packages
+install.packages(c("Hmisc","PerformanceAnalytics"), dependencies=TRUE)
+install.packages("Hmisc")
+
+
+library(envirem) # Have to be called first to avoid conflict with raster packages
+library(spdep)
+library(raster)
+library(rgdal)
+library(ClimDatDownloadR)
+library(rgeos)
+library(sp)
+library(Hmisc)
+library(PerformanceAnalytics)
+
+View(env)
+
+## Getting name of groups and coodinates
+gr.coor <- env[,c("Group", "Lat", "Long")]
+
+## Making the coordinates numeric
+coor <- cbind(as.numeric(as.character(gr.coor$Long)), as.numeric(as.character(gr.coor$Lat)))
+
+## Setting the coordinates system as Long/Lat
+cord.dec = SpatialPoints(cbind(coor[,1], coor[,2]), proj4string=CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84"))
+
+
+## Most of this code came from http://envirem.github.io/ENVIREM_tutorial.html
+## I don't to run Chelsa.Clim.download because I already did it. Below is the path 
+## Where the raster are
+Chelsa.Clim.download(parameter = "bio",
+                     bio.var =  c(1:19), 
+                     version.var = "1.2", 
+                     clipping = FALSE, 
+                     clip.extent = c(-81.5, -77.6, -7, 1.5), 
+                     buffer = 0, 
+                     convert.files.to.asc = FALSE, 
+                     stacking.data = TRUE, 
+                     combine.raw.zip = FALSE,
+                     delete.raw.data = FALSE,
+                     save.bib.file = TRUE)
+
+## Setting the directory where the clipped raster was saved
+wd <- ("C:\\Users\\Daniel\\Dropbox\\Thesis\\Molecular_Wrens\\Radseq\\IBE\\bio\\bio_V1.2\\clipped\\")
+
+## Creating a list with the names of all raster files 
+list.raster <- list.files(wd, full.names = TRUE)
+
+## Reading and stacking the rasters
+stack.ch <- stack(list.raster[1:19])
+
+## Extracting the values for the sampling points I have
+values.ch <- raster::extract(stack.ch, cord.dec)
+
+## Naming the columns
+colnames(values.ch) <- c("AMT","MDR","ISO","TS","MTWM","MTCM","TAR","MTWetQ","MTDQ","MTWarQ","MTCQ","AMP","PWetM","PDM","PS","PWetQ","PDQ","PWarQ","PCQ")
+
+## Merging the coordinates, Chelsa values, population labels
+coor.clim.raw.ch <- cbind.data.frame(coordinates(coor), values.ch)
+colnames(coor.clim.raw.ch)[1:2] <- c("Long", "Lat")
+coor.clim.raw.ch <- cbind(gr.coor, coor.clim.raw.ch)
+
+View(coor.clim.raw.ch)
+################################################################################
+
+## Getting NDVI
+
+install.packages("MODISTools")
+library(MODISTools)
+
+## View Variables we could use
+View(mt_products())
+View(mt_bands(product = "ECO4ESIPTJPL"))
+View(mt_dates(product = "MOD13Q1", lat=coor[1,2], lon=coor[1,1]))
+
+
+## Products
+    # Bands
+
+## MOD13Q1: MODIS/Aqua Vegetation Indices (NDVI/EVI) 16-Day L3 Global 250m SIN Grid
+    # 250m_16_days_EVI
+    # 250m_16_days_NDVI
+
+## MOD15A2H: MODIS/Terra Leaf Area Index/FPAR (LAI/FPAR) 8-Day L4 Global 500 m SIN Grid
+    # Lai_500m
+
+## ECO4ESIPTJPL: ECOSTRESS Evaporative Stress Index PT-JPL (ESI) Daily L4 Global 70 m
+    # ESIavg
+    # PET
+
+## Getting the coordinates data frame in the right format for the app
+coor.mt <- gr.coor
+colnames(coor.mt) <- c("site_name", "lat", "lon")
+
+## Running MODISTools to get EVI
+evi_raw <- mt_batch_subset(df=coor.mt, product="MOD13Q1",
+                           band="250m_16_days_EVI",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19")
+
+ndvi_raw <- mt_batch_subset(df=coor.mt, product="MOD13Q1",
+                           band="250m_16_days_NDVI",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19")
+
+lai_raw <- mt_batch_subset(df=coor.mt, product="MOD15A2H",
+                           band="Lai_500m",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19")  
+
+esi_raw <- mt_batch_subset(df=coor.mt, product="ECO4ESIPTJPL",
+                           band="ESIavg",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19") 
+
+pet_raw <- mt_batch_subset(df=coor.mt, product="ECO4ESIPTJPL",
+                           band="PET",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19")                  
+
+
+#################################################################################
+## Checking the EVI quality
+
+bands <- mt_bands(product = "MOD13Q1")
+View(bands)
+
+
+## Running MODISTools to get EVI
+evi_quality <- mt_batch_subset(df=coor.mt, product="MOD13Q1",
+                           band="250m_16_days_pixel_reliability",
+                           internal=TRUE,
+                           start="2018-01-01",
+                           end="2018-12-19")
+View(evi_quality)
+dim(evi_quality)
+
+evi_qa <- evi_quality %>%
+  dplyr::group_by(site) %>%
+  dplyr::summarise(evi = mean(value, na.rm=TRUE),
+            evi_max = max(value, na.rm=TRUE),
+            evi_min = min(value, na.rm=TRUE))
+
+View(evi_qa)
+
+
+## Add value of evi_quality to evi_raw
+evi_raw <- cbind(evi_raw, evi_quality[,c("value")])
+
+## Leave only the pixels with quality 0
+evi_raw2 <- evi_raw[evi_raw$evi_quality == 0,]
+
+View(evi_raw2)
+
+# checking the number of pixels with quality 0
+range(evi_raw2$evi_quality)
+
+#################################################################################
+
+
+detach(package:plyr)# sometimes plyr package don't let summarise to work
+
+## Getting a summary
+library(plyr)
+
+## Checking data
+View(head(evi_raw))
+
+## Getting the mean, sd and min of EVI
+evi_sum <- evi_raw %>%
+  dplyr::group_by(site) %>%
+  dplyr::summarise(evi = mean(value, na.rm=TRUE),
+            evi_sd = sd(value, na.rm=TRUE),
+            evi_min = min(value, na.rm=TRUE))
+
+evi_sum2 <- evi_raw2 %>%
+  dplyr::group_by(site) %>%
+  dplyr::summarise(evi = mean(value, na.rm=TRUE),
+            evi_sd = sd(value, na.rm=TRUE),
+            evi_min = min(value, na.rm=TRUE))
+
+View(evi_sum2)
+
+## Getting the mean, sd and min of NDVI
+ndvi_sum <- ndvi_raw %>%
+  dplyr::group_by(site) %>%
+  dplyr::summarise(ndvi = mean(value, na.rm=TRUE),
+            ndvi_sd = sd(value, na.rm=TRUE),
+            ndvi_min = min(value, na.rm=TRUE))
+
+## Getting the mean, sd and min of LAI
+lai_sum <- lai_raw %>%
+  dplyr::group_by(site) %>%
+  dplyr::summarise(lai = mean(value, na.rm=TRUE),
+            lai_sd = sd(value, na.rm=TRUE),
+            lai_min = min(value, na.rm=TRUE))
+
+## Merging the data frames
+veg_sum <- merge(evi_sum, ndvi_sum, by="site")
+veg_sum <- merge(veg_sum, lai_sum, by="site")
+
+## Check data
+View(veg_sum)
+
+##### Getting reduced columns
+IV.ch <- coor.clim.raw.ch[,c(1,6,17,20)]
+
+## Merging group name and climate
+gr.iv <- merge(env[,c("Group", "Pop", "Lat", "Long", "Alt")], IV.ch, by="Group")
+colnames(gr.iv)[1:2] <- c("Group", "Pop")
+
+## Merging the climate and evi variables
+gr.iv <- merge(gr.iv, veg_sum, by.x="Group", by.y="site", all.x=TRUE)
+
+## Merging genetic spatial and climate
+pop.order <- merge(gen.spatial, gr.iv, by=c("Group"))
+
+## Ordering by Latitude
+pop.order <- pop.order[order(-pop.order$AMP),]
+
+## Sites order
+site_order_clim <- unique(pop.order$Pop.y)
+
+## Merging all data of aggression variables and climate
+Exp.all.clim <- merge(Exp.gc, gr.iv, by.x="Group.x", by.y="Group")
+
+## Deleting rows for Exp PB028. There was two Exp for this group
+## I'm deleting the first one.
+Exp.all.clim <- Exp.all.clim[!grepl("PB028", Exp.all.clim$Exp),]
+
+dim(Exp.all.clim)
+
+######################      MASTER DATAFRAME      ##############################            
+## join Number of individuals in Exp and variables
+colnames(Exp.all.clim)[c(1,5)] <- c("Group", "Treatment")
+
+## Reading data for the description of experiments (metadata)
+Meta.exp.raw <- read.csv("Exp.csv", sep=",", header=TRUE, as.is=T)
+
+## Adding the meta info to the data
+Exp.all.clim <- merge(Exp.all.clim, Meta.exp.raw, by="Group")
+
+dim(Exp.all.clim)
+
+#################################################################################
+
+colnames(Exp.all.clim)
+
+## Making GC a dummy variable
+Exp.all.clim$GC_d <- ifelse(Exp.all.clim$GC == "CZ", 1, 
+ifelse(Exp.all.clim$GC == "CFP_N", 2, 3))
+
+## Making Treatment a dummy variable
+Exp.all.clim$Treatment_d <- ifelse(Exp.all.clim$Treatment == "BBWR", 1, 0)
+
+## Inv has NA in it, changing to one, we assume there was at least one individual responding.
+## These was speially in BBWR where I found single individuals
+#Exp.all.clim$Inv[is.na(Exp.all.clim$Inv)] <- 1
+
+## Scaling the variables
+#Exp.all.clim$Dist_sc <- scale(Exp.all.clim$Dist, center = TRUE)
+#Exp.all.clim$Timing_sec_sc <- scale(Exp.all.clim$Timing_sec)
+#Exp.all.clim$TFAP_sc <- scale(Exp.all.clim$TFAP)
+#Exp.all.clim$AMT_sc <- scale(Exp.all.clim$AMT)
+#Exp.all.clim$AMP_sc <- scale(Exp.all.clim$AMP)
+#Exp.all.clim$PS_sc <- scale(Exp.all.clim$PS)
+#Exp.all.clim$Lat_sc <- scale(Exp.all.clim$Lat)
+#Exp.all.clim$Long_sc <- scale(Exp.all.clim$Long)
+#Exp.all.clim$evi_sd_sc <- scale(Exp.all.clim$evi_sd)
+#Exp.all.clim$evi_sc <- scale(Exp.all.clim$evi)
+#Exp.all.clim$evi_min_sc <- scale(Exp.all.clim$evi_min)
+#Exp.all.clim$ndvi_sc <- scale(Exp.all.clim$ndvi)
+#Exp.all.clim$ndvi_sd_sc <- scale(Exp.all.clim$ndvi_sd)
+#Exp.all.clim$ndvi_min_sc <- scale(Exp.all.clim$ndvi_min)
+#Exp.all.clim$lai_sc <- scale(Exp.all.clim$lai)
+#Exp.all.clim$lai_sd_sc <- scale(Exp.all.clim$lai_sd)
+#Exp.all.clim$lai_min_sc <- scale(Exp.all.clim$lai_min)
+#Exp.all.clim$Inv_sc <- as.vector(scale(Exp.all.clim$Inv))
+
+
+## Make variables greater than zero to adjust to dexp
+#Exp.all.clim$TFAP_pos <- Exp.all.clim$TFAP_sc + abs(min(Exp.all.clim$TFAP_sc, na.rm=TRUE)) + 1
+#Exp.all.clim$Dist_pos <- Exp.all.clim$Dist_sc + abs(min(Exp.all.clim$Dist_sc, na.rm=TRUE)) + 1
+#Exp.all.clim$Latency_pos <- Exp.all.clim$Timing_sec_sc + abs(min(Exp.all.clim$Timing_sec_sc, na.rm=TRUE)) + 1
+
+# replace NA with zeros in the data to adjust it to Exponential distribution
+#Exp.all.clim$Latency_pos[is.na(Exp.all.clim$Latency_pos)] <- 0.1
+
+dim(Exp.all.clim)
+colnames(Exp.all.clim)
+View(Exp.all.clim)
+
+plot(Exp.all.clim$AMT, Exp.all.clim$evi_sd)
+
+#################################################################################
+## Adding plant diversity data
+
+## Path to the raster files
+path.plRich <- "C:/Users/Daniel/Dropbox/Thesis/AggressiveBehavior/R/3506_70_Dataset/"
+
+library(raster)
+
+## Read the raster w3_tile_joint_sr1000.tif at path.plRich
+r <- raster(paste0(path.plRich, "w3_tile_joint_sr1000.tif"))
+
+## Extract values of r using cord.dec
+values.r <- raster::extract(r, cord.dec)
+
+## Adding group name to the raster values
+values.r <- cbind(gr.coor, values.r)
+
+View(values.r)
+
+## Merging group name and climate
+Exp.all.clim <- merge(Exp.all.clim, values.r, by="Group")
+
+colnames(Exp.all.clim)
+
+## scale plant richness
+#Exp.all.clim$Rich_sc <- as.vector(scale(Exp.all.clim$values.r))
+
+#################################################################################
+
+## Get loading of PCA for primary productivity
+
+colnames(Exp.all.clim)
+prod.var <- c("evi", "evi_sd", "evi_min",
+"ndvi", "ndvi_sd", "ndvi_min",
+"lai", "lai_sd", "lai_min", "values.r", )
+
+
+######################      PCA VEG      ###########################################
+
+## Getting the PCA veg1
+pca.veg <- prcomp(Exp.all.clim[,prod.var], scale=TRUE)
+summary(pca.veg)
+
+plot(pca.veg)
+
+## Make a staylish Plot of the loadings for publication 
+## (https://www.r-graph-gallery.com/82-r-plot-pca-variance-explained/)
+library(ggplot2)
+library(ggpubr)
+
+## Get the data
+data.var <- as.data.frame(pca.veg$rotation)
+
+## Add a column with the variable names
+data.var$var <- rownames(data.var)
+
+## Get the percentage of variance explained by each variable
+data.var$variance <- pca.veg$sdev^2/sum(pca.veg$sdev^2)*100
+
+## Get the position of the text
+data.var$hjust <- ifelse(data.var$PC1 > 0, 0, 1)
+data.var$vjust <- ifelse(data.var$PC2 > 0, 1, 0)
+data.var$hjust[data.var$var == "evi"] <- 1
+data.var$hjust[data.var$var == "evi_sd"] <- 1
+data.var$hjust[data.var$var == "evi_min"] <- 1
+data.var$hjust[data.var$var == "ndvi_sc"] <- 1
+data.var$hjust[data.var$var == "ndvi_sd_sc"] <- 1
+data.var$hjust[data.var$var == "ndvi_min_sc"] <- 1
+data.var$hjust[data.var$var == "lai_sc"] <- 1
+data.var$hjust[data.var$var == "lai_sd_sc"] <- 1
+data.var$hjust[data.var$var == "lai_min_sc"] <- 1
+data.var$hjust[data.var$var == "Rich_sc"] <- 1
+
+## Make the plot
+pprod.pca <- ggplot(data.var, aes(x=PC1, y=PC2)) +
+  geom_hline(yintercept=0, linetype="dashed") +
+  geom_vline(xintercept=0, linetype="dashed") +
+  geom_point(aes(size=variance), color="blue", alpha=0.6) +
+  geom_text(aes(label=var, hjust=hjust, vjust=vjust), 
+  position = position_dodge(width=0.2), size=6) +
+  scale_size_continuous(range = c(2, 10)) +
+  labs(x="PC1 (44.5%)", y="PC2 (22.5%)") +
+  theme(legend.position="none") +
+  theme(text = element_text(size=20))
+
+  ## Gitter the the position of labels to avoid overlap with points
+    pprod.pca + geom_text(aes(label=var, hjust=hjust, vjust=vjust),
+    position = position_jitter(width=0.2, height=0.2), size=7)
+
+## Getting the first pc1
+Exp.all.clim$pca.veg1 <- pca.veg$x[,1]
+
+## Getting the second pc2
+Exp.all.clim$pca.veg2 <- pca.veg$x[,2]
+
+## PCA with climate variables
+pca.clim.var <- c("AMT", "AMP", "PS")
+
+
+######################      PCA CLIM      ###########################################
+
+## Getting the PCA
+pca.clim <- prcomp(Exp.all.clim[,pca.clim.var], scale=TRUE)
+summary(pca.clim)
+
+## getting the first pc1
+Exp.all.clim$pca.clim1 <- pca.clim$x[,1]
+
+## Getting the second pc2
+Exp.all.clim$pca.clim2 <- pca.clim$x[,2]
+
+## Make a staylish Plot of the pca with pca.clim of the loadings for publication 
+## (https://www.r-graph-gallery.com/82-r-plot-pca-variance-explained/)
+library(ggplot2)
+library(ggpubr)
+
+## Get the data
+data.var1 <- as.data.frame(pca.clim$rotation)
+
+## Add a column with the variable names
+data.var1$var <- rownames(data.var1)
+
+## Get the percentage of variance explained by each variable
+data.var1$variance <- pca.clim$sdev^2/sum(pca.clim$sdev^2)*100
+
+## Get the position of the text
+data.var1$hjust <- ifelse(data.var1$PC1 > 0, 0, 1)
+data.var1$vjust <- ifelse(data.var1$PC2 > 0, 1, 0)
+data.var1$hjust[data.var1$var == "AMT"] <- 1
+data.var1$hjust[data.var1$var == "AMP"] <- 1
+data.var1$hjust[data.var1$var == "PS"] <- 1
+
+## Make the plot
+pclim.pca <- ggplot(data.var1, aes(x=PC1, y=PC2)) +
+  geom_hline(yintercept=0, linetype="dashed") +
+  geom_vline(xintercept=0, linetype="dashed") +
+  geom_point(aes(size=variance), color="blue", alpha=0.6) +
+  geom_text(aes(label=var, hjust=hjust, vjust=vjust), 
+  position = position_dodge(width=0.2), size=6) +
+  scale_size_continuous(range = c(2, 10)) +
+  labs(x="PC1 (44.5%)", y="PC2 (22.5%)") +
+  theme(legend.position="none") +
+  theme(text = element_text(size=20))
+
+  ## Gitter the the position of labels to avoid overlap with points
+    pclim.pca + geom_text(aes(label=var, hjust=hjust, vjust=vjust),
+    position = position_jitter(width=0.2, height=0.2), size=7)
+
+#################################################################################
+
+## Getting the variables for the GDM
+Exp.mv.clim <- Exp.all.clim %>%
+  dplyr::group_by(Group) %>%
+  dplyr::summarise(MinDist1=min(Dist, na.rm=TRUE),
+            Latency1=mean(Timing_sec, na.rm=TRUE),
+            TFAP1=sum(TFAP, na.rm=TRUE),
+            AMT1=mean(AMT, na.rm=TRUE),
+            AMP1=mean(AMP, na.rm=TRUE),
+            PS1=mean(PS, na.rm=TRUE),
+            Lat1=mean(Lat, na.rm=TRUE),
+            Long1=mean(Long, na.rm=TRUE),
+            evi1=mean(evi, na.rm=TRUE),
+            evi_min1=min(evi_min, na.rm=TRUE),
+            ndvi1=mean(ndvi, na.rm=TRUE),
+            ndvi_min1=min(ndvi_min, na.rm=TRUE),
+            lai1=mean(lai, na.rm=TRUE),
+            lai_min1=min(lai_min, na.rm=TRUE),
+            Inv1=mean(Inv, na.rm=TRUE),
+            Rich1=mean(values.r, na.rm=TRUE),
+            pca.veg11=mean(pca.veg1, na.rm=TRUE),
+            pca.veg12=mean(pca.veg2, na.rm=TRUE),
+            pca.clim11=mean(pca.clim1, na.rm=TRUE),
+            pca.clim12=mean(pca.clim2, na.rm=TRUE))
+
+## Remove the ones from colnames in  Exp.mv.clim
+colnames(Exp.mv.clim)[c(2:21)] <- c("MinDist", 
+"Latency", 
+"TFAP", 
+"AMT", 
+"AMP", 
+"PS", 
+"y", 
+"x", 
+"evi", 
+"evi_min", 
+"ndvi", 
+"ndvi_min", 
+"lai", 
+"lai_min", 
+"Inv", 
+"Rich", 
+"pca.veg1", 
+"pca.veg2", 
+"pca.clim1", 
+"pca.clim2")
+
+## Order Exp.mv.clim by GRoup
+Exp.mv.clim <- Exp.mv.clim[order(Exp.mv.clim$Group),]
+
+## Get the variable with pca
+Exp.gdm.pred <- as.data.frame(Exp.mv.clim[,c("Group", "x", "y", "pca.veg1", "pca.veg2", "pca.clim1", "pca.clim2")])
+dim(Exp.gdm.pred)
+head(Exp.gdm.pred)
+
+## Get the variable without pca
+Exp.gdm.pred2 <- as.data.frame(Exp.mv.clim[,c("Group", "x", "y", "AMT", "AMP", "PS", "pca.veg1", "pca.veg2")])
+dim(Exp.gdm.pred2)
+head(Exp.gdm.pred2)
+
+## get the variables with sc in Exp.all.clim
+Exp.pred.sc <- Exp.all.clim[,c("Group", "Lat.y", "Long.y", "Dist", "Dist_sc",
+"Timing_sec", "Timing_sec_sc", "TFAP", "TFAP_sc", "AMT_sc", "AMP_sc", "PS_sc",
+"evi", "evi_sd", "evi_min", "ndvi", "ndvi_sd", "ndvi_min", "lai", "lai_sd", "lai_min", "values.r",
+"evi_sc", "evi_sd_sc", "evi_min_sc", "ndvi_sc", "ndvi_sd_sc", "ndvi_min_sc", "lai_sc", "lai_sd_sc", "lai_min_sc", "Rich_sc",
+"Inv_sc", "pca.veg1", "pca.veg2", "pca.clim1", "pca.clim2")]
+
+## Make variables greater than zero to adjust to dexp
+Exp.pred.sc$TFAP_pos <- Exp.pred.sc$TFAP_sc + abs(min(Exp.pred.sc$TFAP_sc, na.rm=TRUE)) + 1
+Exp.pred.sc$Dist_pos <- Exp.pred.sc$Dist_sc + abs(min(Exp.pred.sc$Dist_sc, na.rm=TRUE)) + 1
+
+path <- "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/MOD17A2H.061/MOD17A2H.A2023281.h09v09.061.2023290184815/MOD17A2H.A2023281.h09v09.061.2023290184815.hdf"
+
+## Download file at path location
+download.file(path, destfile = "MOD17A2H.A2023281.h09v09.061.2023290184815.hdf")
+
+
+```
+
+## DEFINITIONS OF PRIMARY PRODUCTIVITY VARIABLES
+
+Landsat Enhanced Vegetation Index (EVI) is similar to Normalized Difference Vegetation Index (NDVI) 
+and can be used to quantify vegetation greenness. However, EVI corrects for some atmospheric conditions
+ and canopy background noise and is more sensitive in areas with dense vegetation.
+
+The NDVI index detects and quantifies the presence of live green vegetation using this reflected light 
+in the visible and near-infrared bands. Put simply, NDVI is an indicator of the vegetation 
+greenness —the density and health—of each pixel in a satellite image.
+
+LAI is defined as the one-sided green leaf area per unit ground area in broadleaf canopies and as 
+one-half the total needle surface area per unit ground area in coniferous canopies.
+
+The ESI is an indicator of potential drought and plant water stress emphasizing areas of sub-optimal plant productivity.
+The ESI product is derived from the ratio of the Level 3 actual evapotranspiration (ET) to potential ET (PET) 
+calculated as part of the algorithm. The ESI is an indicator of potential drought and plant water stress. 
+emphasizing areas of sub-optimal plant productivity.
+
+```{r Getting Net Primary Productivity}
+
+## Get list of files in NPP/npp folder
+npp.list <- list.files("C:/Users/Daniel/Dropbox/Thesis/AggressiveBehavior/R/NPP/npp", full.names = TRUE)
+npp.list <- npp.list[1:8]
+head(npp.list)
+str(npp.list)
+class(npp.list)
+
+######################      NPP      ###########################################
+## Getting NPP second layer of hdf files
+
+## Repeat the process above for every 4 hdf files and stack the mosaics in a list
+#rlist <- lapply(seq(1, length(npp.list), by = 4), function(i) {
+#  r <- do.call(mosaic, c(lapply(npp.list[i:(i+3)], raster(layer=2)), fun = mean))
+#  writeRaster(r, paste0("npp", i, ".tif"), overwrite=TRUE)
+#  r
+#}) 
+
+library(rgdal)
+library(raster)
+library(gdalUtils)
+library(terra)
+
+sds <- sds(npp.list[1])
+names(sds[[2]])
+
+## Getting all the hdf files in a list
+npp.hdf.list <- list()
+for(i in 1:length(npp.list)){
+  npp.hdf.list[[i]] <- terra::sds(npp.list[[i]])
+}
+
+## Check the number of layers of the first element of the list
+sds1 <- sds(npp.hdf.list[5])
+str(sds1)
+
+## Extracting the second layer of hdf files
+npp.raster <- list()
+for(i in 1:length(npp.hdf.list)){
+  npp.raster[[i]] <- raster((npp.hdf.list[[i]])[2])
+}
+
+## Checking data
+names(npp.raster[[4]])
+str(npp.raster[[1]])
+class(npp.raster[[1]])
+
+## Make a mosaic using every 4 rasters of the rlist 
+npp.mosaic <- lapply(seq(1, length(npp.raster), by = 4), function(i) {
+  r <- do.call(mosaic, c(npp.raster[i:(i+3)], fun = mean))
+  r
+})
+
+## Check data
+plot(npp.mosaic[[1]])
+length(npp.mosaic)
+
+## Get values of every element of rlist that match with cord.dec
+values.npp <- lapply(npp.mosaic, function(x) raster::extract(x, cord.dec))
+class(values.npp)
+View(values.npp[[1]])
+str(values.npp)
+
+## Convert values.npp to matrix
+values.npp <- do.call(cbind, values.npp)
+str(values.npp)
+View(values.npp)
+
+## Get mean of every row
+values.mean.npp <- apply(values.npp, 1, mean, na.rm=TRUE)
+
+## Get standard deviation of every row
+values.sd.npp <- apply(values.npp, 1, sd, na.rm=TRUE)
+
+temp <- cbind(gr.coor, values.mean.npp)
+
+## Merging group name and climate
+Exp.clim.npp <- merge(Exp.all.clim, temp[,c(1,4)], by="Group")
+
+## Merging group name and climate
+colnames(Exp.clim.npp)[c(96)] <- c("mean.npp")
+
+
+
+######################      MODIS.Terra.Net.Photosynthesis      ###########################################
+## MODIS.Terra.Net.Photosynthesis..GPP...maint.resp..8.Day.L4.Global.500m.SIN.Grid
+## Getting GPP first layer of hdf files
+
+## Get list of files in NPP/npp folder
+gpp.list <- list.files("C:/Users/Daniel/Dropbox/Thesis/AggressiveBehavior/R/NPP/gpp", full.names = TRUE)
+gpp.list <- gpp.list[1:195]
+head(gpp.list)
+str(gpp.list)
+class(gpp.list)
+
+#### Checking data
+
+sds2 <- sds(gpp.list[[1]])
+str(sds2)
+names(sds2[[2]])
+
+## Precesing hdf files
+
+## Getting all the hdf files in a list
+rlist.gpp <- list()
+for(i in 1:length(gpp.list)){
+  rlist.gpp[[i]] <- terra::sds(gpp.list[[i]])
+}
+
+## Checking sds data
+str(rlist.gpp[1])
+plot((rlist.gpp[[1]])[1])
+names((rlist.gpp[[190]])[2])
+length(rlist.gpp)
+
+## Extracting second layer of hdf files
+rlist.nph <- list()
+for(i in 1:length(rlist.gpp)){
+  rlist.nph[[i]] <- raster((rlist.gpp[[i]])[2])
+}
+
+## Checking sds data
+names(rlist.nph[[195]])
+str(rlist.nph[[195]])
+class(rlist.nph[[195]])
+
+## Make a mosaic using every 4 rasters of the rlist
+rlist.mosaic.nph <- lapply(seq(1, length(rlist.nph), by = 4), function(i) {
+  r <- do.call(mosaic, c(rlist.nph[i:(i+3)], fun = mean))
+  r
+})
+
+plot(rlist.mosaic.nph[[1]])
+length(rlist.mosaic.nph)
+
+## GEt values of every element of rlist that match with cord.dec
+values.nph <- lapply(rlist.mosaic.nph, function(x) raster::extract(x, cord.dec))
+class(values.nph)
+View(values.nph[[1]])
+str(values.nph)
+
+## Convert values.npp to matrix
+values.nph <- do.call(cbind, values.nph)
+str(values.nph)
+View(values.nph)
+
+## Get mean of every row
+values.mean.nph <- apply(values.nph, 1, mean, na.rm=TRUE)
+
+## Get standard deviation of every row
+values.sd.nph <- apply(values.nph, 1, sd, na.rm=TRUE)
+
+temp <- cbind(gr.coor, values.mean.nph, values.sd.nph)
+
+## Merging group name and climate
+colnames(Exp.all.clim)
+colnames(temp)
+Exp.npp.nph <- merge(Exp.clim.npp, temp[,c(1,4:5)], by="Group")
+
+colnames(Exp.npp.nph)
+range(Exp.npp.nph$mean.npp, na.rm=TRUE)
+
+
+################      Getting the Data Frame for SEM     ##########################
+
+colnames(Exp.npp.nph)
+View(Exp.npp.nph)
+
+## Remove rows with missing datain values.mean.nph
+Exp.npp.nph.comp <- Exp.npp.nph[-c(190,191),]
+View(Exp.npp.nph.comp)
+
+## Get index of row with outliers for mean.np in Exp.all.clim
+which(Exp.npp.nph.comp$mean.nph > 3 | Exp.npp.nph.comp$mean.nph < -3)
+
+## Remove column Observation.x and Observation.y
+colnames(Exp.npp.nph.comp)
+Exp.npp.nph.comp <- Exp.npp.nph.comp[,-c(17,34)]
+
+## Getting the variables for the SEM
+library(dplyr)
+Exp.sem.clim.raw <- Exp.npp.nph.comp %>%
+  dplyr::group_by(Group) %>%
+  dplyr::summarise(GC1=mean(GC_d, na.rm=TRUE),
+            MinDist=min(Dist, na.rm=TRUE),
+            Latency=mean(Timing_sec, na.rm=TRUE),
+            TFAP1=sum(TFAP, na.rm=TRUE),
+            AMT1=mean(AMT, na.rm=TRUE),
+            AMP1=mean(AMP, na.rm=TRUE),
+            PS1=mean(PS, na.rm=TRUE),
+            Lat=mean(Lat.y, na.rm=TRUE),
+            Long=mean(Long.y, na.rm=TRUE),
+            evi1=mean(evi, na.rm=TRUE),
+            evi_sd1=mean(evi_sd, na.rm=TRUE),
+            ndvi1=mean(ndvi, na.rm=TRUE),
+            ndvi_sd1=mean(ndvi_sd, na.rm=TRUE),
+            lai1=mean(lai, na.rm=TRUE),
+            lai_sd1=mean(lai_sd, na.rm=TRUE),
+            Inv1=mean(Inv, na.rm=TRUE),
+            Rich1=mean(values.r, na.rm=TRUE),
+            pca_veg1=mean(pca.veg1, na.rm=TRUE),
+            pca_veg2=mean(pca.veg2, na.rm=TRUE),
+            pca_clim1=mean(pca.clim1, na.rm=TRUE),
+            mean_npp=mean(mean.npp, na.rm=TRUE),
+            mean_nph=mean(values.mean.nph, na.rm=TRUE),
+            sd_nph=mean(values.sd.nph, na.rm=TRUE))
+
+          
+View(Exp.sem.clim.raw)
+dim(Exp.sem.clim.raw)
+
+## Remove the ones from colnames in  Exp.sem.clim
+colnames(Exp.sem.clim.raw)[c(2:ncol(Exp.sem.clim.raw))] <- c("GC",
+"MinDist", 
+"Latency", 
+"TFAP", 
+"AMT", 
+"AMP", 
+"PS", 
+"Lat", 
+"Lon", 
+"evi",
+"evi_sd",
+"ndvi",
+"ndvi_sd",
+"lai", 
+"lai_sd",
+"Inv", 
+"Rich", 
+"pca1.veg", 
+"pca2.veg", 
+"pca1.clim", 
+"mean.npp",
+"mean.nph",
+"sd.nph")
+
+## Scale continuous variables in Exp.sem.clim at once
+Exp.sem.clim <- Exp.sem.clim.raw
+Exp.sem.clim[,c(2:ncol(Exp.sem.clim))] <- scale(Exp.sem.clim[,c(2:ncol(Exp.sem.clim))])
+
+dim(Exp.sem.clim)
+colnames(Exp.sem.clim)
+View(Exp.sem.clim)
+
+plot(Exp.sem.clim$Lat, Exp.sem.clim$mean.nph)
+
+
+```
+
+After wroking with several exploratory models using different ways to represent primary productivity,
+it seems just EVI produce the best results. Therefore, I will use EVI as the only primary productivity.
+Modis NPP hasn't been tested etensively in tropical ecosytems and it seems to be a poor predictor for our data.
+
+#### Testing Normality for response variables
+
+```{r Testing Normality}
+
+## Exploring Normality ####
+
+## Intalling ggpbur for nice plots
+install.packages("ggpubr")
+library(ggpubr)
+
+## With Minimum Distance
+ggdensity(Exp.all.clim$Dist)
+ggdensity(scale(Exp.all.clim$Dist))
+
+ggqqplot(Exp.all.clim$Dist)
+shapiro.test(Exp.all.clim$Dist)
+
+ggqqplot(log(Exp.all.clim$Dist+1))
+ggdensity(log(Exp.all.clim$Dist+1))
+shapiro.test(log(Exp.all.clim$Dist+1))
+
+ggqqplot(sqrt(Exp.all.clim$Dist_sc+1))
+shapiro.test(sqrt(Exp.all.clim$Dist+1))
+
+ggqqplot(sqrt((max(Exp.all.clim$Dist+1)+1)-(Exp.all.clim$Dist+1)))
+shapiro.test(sqrt((max(Exp.all.clim$Dist+1)+1)-(Exp.all.clim$Dist+1)))
+
+ggqqplot(exp(Exp.all.clim$Dist_sc+1))
+shapiro.test(exp(Exp.all.clim$Dist+1))
+
+ggqqplot(1/max(Exp.all.clim$Dist_sc+1)^2+1)
+shapiro.test(exp(Exp.all.clim$Dist+1))
+
+## With Latency
+ggdensity(Exp.all.clim$Timing_sec)
+ggdensity(scale(Exp.all.clim$Dist))
+
+ggqqplot(Exp.all.clim$Dist)
+shapiro.test(Exp.all.clim$Dist)
+
+ggqqplot(log(Exp.all.clim$Dist+1))
+shapiro.test(log(Exp.all.clim$Dist+1))
+
+ggqqplot(sqrt(Exp.all.clim$Dist))
+shapiro.test(sqrt(Exp.all.clim$Dist))
+
+## With TFAP
+ggdensity(Exp.gc$TFAP)
+ggdensity(scale(Exp.gc$TFAP))
+
+ggqqplot(Exp.gc$TFAP)
+shapiro.test(Exp.gc$TFAP)
+
+ggqqplot(Exp.mv.clim$MinDist_sc)
+ggqqplot(Exp.mv.clim$Latency_sc)
+ggqqplot(Exp.mv.clim$TFAP_sc)
+shapiro.test(Exp.mv.clim$TFAP_sc)
+
+plot(density(Exp.mv.clim$MinDist_sc))
+plot(density(Exp.mv.clim$Latency_sc))
+plot(density(Exp.mv.clim$TFAP_sc))
+plot(density(Exp.mv.clim$pca1))
+plot(density(Exp.mv.clim$pca2))
+
+hist(Exp.mv.clim$MinDist_sc, breaks=10)
+hist(Exp.mv.clim$Latency_sc, breaks=10)
+hist(Exp.mv.clim$TFAP_sc, breaks=10)
+
+ggdensity(dexp(Exp.all.clim$Dist_sc, 1))
+ggdensity(Exp.all.clim$Dist_sc)
+
+
+mean(abs(Exp.all.clim$Dist_sc))
+dexp(Exp.all.clim$Dist_sc,1)
+dexp(-0.5,1)
+
+```
+None of the variables follow a normal distribution
+
+```{r Mixed Models}
+
+library(lme4)
+install.packages("glmmTMB")
+library(glmmTMB)
+
+install.packages("gamlss")
+library(gamlss)
+
+
+colnames(Exp.npp.nph.comp)
+Exp.npp.nph.comp
+
+## Select variables from Exp.npp.nph.comp
+Exp.glm <- Exp.npp.nph.comp[,c("Group", "Timing_sec", "Dist", "TFAP", "GC", "Treatment.y", "AMT", "AMP", "PS", "evi", "evi_sd", 
+                                "ndvi", "ndvi_sd", "lai", "lai_sd", "Inv", "pca.veg1", 
+                                "pca.veg2", "pca.clim1", "mean.npp", "values.mean.nph", "values.sd.nph")]
+
+dim(Exp.glm)
+colnames(Exp.glm)
+View(Exp.glm)
+
+## Scaled the independent variables
+Exp.glm.c <- Exp.glm
+Exp.glm.c[,c(7:ncol(Exp.glm.c))] <- scale(Exp.glm.c[,c(7:ncol(Exp.glm.c))])
+View(Exp.glm.c)
+
+
+#########################################################################################
+
+## Mixed Models ####
+m.dist <- glmer(Dist+1 ~ AMT + AMP + PS + evi + Inv + (1|Treatment.y) + (1|GC), data=Exp.glm.c, family=Gamma,
+                control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+summary(m.dist)
+
+## Get p-values for model terms
+library(car)
+Anova(m.dist, type="II")
+
+## Regresion of the mediator
+m.evi <- lm(evi ~ AMT + AMP + PS, data=Exp.glm.c)
+
+summary(m.evi)
+
+install.packages("mediation")
+library(mediation)
+
+med.out <- mediate(m.dist, m.evi, treat="Treatment.y", mediator="evi",
+                    robustSE = TRUE, sims=1000)
+
+
+```
+
+```{r Plotting Response Variables by Genetic Population (Pop)}
+
+library(ggplot2)
+library(ggpubr) 
+
+colnames(Exp.glm.c)
+View(Exp.glm.c)
+Exp.plot <- Exp.glm.c[,c(1:10,16)]
+head(Exp.plot)
+colnames(Exp.plot)
+
+## Creating an order for Genetic Population
+gc_order <- c("CZ", "CFP_N", "CFP_S")
+
+## Order of Populations
+Exp.plot$GC <- factor(Exp.plot$GC, levels=gc_order)
+
+## Order treatment as Control, C. z. brevirostris, C. f. pallescens South
+Exp.plot$Treatment.y <- factor(Exp.plot$Treatment.y, levels=c("Control", "BBWR", "FWR"))
+levels(Exp.plot$Treatment.y)
+
+colnames(Exp.plot)
+head(Exp.plot)
+View(Exp.plot)
+
+## Plotting 
+
+######################################################################
+## Distance
+
+## Create pdf where each page is a separate plot.
+
+pdf("H1.distance.pdf", width = 12, height = 8)
+
+ggplot(Exp.plot, aes_string(x='GC', y="Dist",
+                                      fill='Treatment.y'))+
+  geom_boxplot()+
+  scale_fill_manual(values=c("#009E73", "#0072B2", "#D55E00"),
+                    labels=c('Control', 'C. z. brevirostris', 'C. f. pallescens South'))+  
+  scale_x_discrete(labels=c('C. z. brevirostris', 'C. f. pallescens North', 'C. f. pallescens South')) +                                     
+  theme_bw()+
+  ylab("Minimum Distance (m)")+
+  xlab("Genetic Clusters")+
+  theme(axis.text.x = element_blank(),
+        #axis.text.x = element_text(size=14, hjust=0.35),
+        axis.title.x = element_text(face = "bold", size=16, vjust=0.9), 
+        axis.title.y = element_text(face = "bold", size=16, margin = margin(r = 20)),
+        axis.text.y = element_text(size=14),
+        legend.text=element_text(size=14),
+        legend.title=element_text(face = "bold", size=16),
+        axis.ticks.x = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  guides(fill=guide_legend(title="Treatments")) +
+## X axis text
+  geom_text(aes(x=1, y=-12, label="C. z. brevirostris"), size=5, vjust=0, hjust=0.35, color="black") +
+  geom_text(aes(x=2, y=-12, label="C. f. pallecens North"), size=5, vjust=0, hjust=0.35, color="black") +
+  geom_text(aes(x=3, y=-12, label="C. f. pallecens South"), size=5, vjust=0, hjust=0.35, color="black") +
+## Among Treatments
+  geom_text(aes(x=1.1, y=-4, label="NS"), size=4, vjust=0, hjust=0, color="black") +
+  geom_text(aes(x=2.1, y=-4, label="NS"), size=4, vjust=0, hjust=0, color="black") +
+  geom_text(aes(x=3.1, y=-4, label="NS"), size=4, vjust=0, hjust=0, color="black")+
+
+  annotate("segment", x = 1, xend = 1.25, y = -2, yend = -2, size=0.6)+
+  annotate("segment", x = 1, xend = 1, y = -1.5, yend = -2.5, size=0.4)+ 
+  annotate("segment", x = 1.25, xend = 1.25, y = -1.5, yend = -2.5, size=0.4)+ 
+
+  annotate("segment", x = 2, xend = 2.25, y = -2, yend = -2, size=0.6)+
+  annotate("segment", x = 2, xend = 2, y = -1.5, yend = -2.5, size=0.4)+ 
+  annotate("segment", x = 2.25, xend = 2.25, y = -1.5, yend = -2.5, size=0.4)+ 
+
+  annotate("segment", x = 3, xend = 3.25, y = -2, yend = -2, size=0.6)+
+  annotate("segment", x = 3, xend = 3, y = -1.5, yend = -2.5, size=0.4)+ 
+  annotate("segment", x = 3.25, xend = 3.25, y = -1.5, yend = -2.5, size=0.4)+ 
+
+## Among Genetic Clusters
+  geom_text(aes(x=1.5, y=-18, label="**"), size=8, vjust=0, hjust=0, color="black") +
+  geom_text(aes(x=2.7, y=-18, label="**"), size=8, vjust=0, hjust=0, color="black")+
+
+  annotate("segment", x = 1.2, xend = 1.9, y = -14.2, yend = -14.2, size=0.6)+
+  annotate("segment", x = 1.2, xend = 1.2, y = -13.7, yend = -14.7, size=0.4)+ 
+  annotate("segment", x = 1.9, xend = 1.9, y = -13.7, yend = -14.7, size=0.4)+ 
+
+  annotate("segment", x = 2.4, xend = 3.2, y = -14.2, yend = -14.2, size=0.6)+
+  annotate("segment", x = 2.4, xend = 2.4, y = -13.7, yend = -14.7, size=0.4)+ 
+  annotate("segment", x = 3.2, xend = 3.2, y = -13.7, yend = -14.7, size=0.4) 
+
+dev.off()
+
+
+
+######################################################################
+## LATENCY
+
+## Create pdf where each page is a separate plot.
+
+pdf("H1.latency.pdf", width = 12, height = 8)
+
+ggplot(Exp.plot, aes_string(x='GC', y="Timing_sec",
+                                      fill='Treatment.y'))+
+  geom_boxplot()+
+  scale_fill_manual(values=c("#009E73", "#0072B2", "#D55E00"),
+                    labels=c('Control', 'C. z. brevirostris', 'C. f. pallescens South'))+  
+  scale_x_discrete(labels=c('C. z. brevirostris', 'C. f. pallescens North', 'C. f. pallescens South')) +                                     
+  theme_bw()+
+  ylab("Latency (seconds)")+
+  xlab("Genetic Clusters")+
+  theme(axis.text.x = element_blank(),
+        #axis.text.x = element_text(size=14, hjust=0.35),
+        axis.title.x = element_text(face = "bold", size=16, vjust=0.9), 
+        axis.title.y = element_text(face = "bold", size=16, margin = margin(r = 20)),
+        axis.text.y = element_text(size=14),
+        legend.text=element_text(size=14),
+        legend.title=element_text(face = "bold", size=16),
+        axis.ticks.x = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  guides(fill=guide_legend(title="Treatments")) +
+## X axis text
+  geom_text(aes(x=1, y=-24, label="C. z. brevirostris"), size=5, vjust=0, hjust=0.35, color="black") +
+  geom_text(aes(x=2, y=-24, label="C. f. pallecens North"), size=5, vjust=0, hjust=0.35, color="black") +
+  geom_text(aes(x=3, y=-24, label="C. f. pallecens South"), size=5, vjust=0, hjust=0.35, color="black") +
+## Among Treatments
+  geom_text(aes(x=1.1, y=-7, label="NS"), size=4, vjust=0, hjust=0, color="black") +
+  geom_text(aes(x=2.1, y=-7, label="NS"), size=4, vjust=0, hjust=0, color="black") +
+  geom_text(aes(x=3.1, y=-7, label="NS"), size=4, vjust=0, hjust=0, color="black")+
+
+  annotate("segment", x = 1, xend = 1.25, y = -2, yend = -2, size=0.6)+
+  annotate("segment", x = 1, xend = 1, y = -0, yend = -4, size=0.4)+ 
+  annotate("segment", x = 1.25, xend = 1.25, y = -0, yend = -4, size=0.4)+ 
+
+  annotate("segment", x = 2, xend = 2.25, y = -2, yend = -2, size=0.6)+
+  annotate("segment", x = 2, xend = 2, y = -0, yend = -4, size=0.4)+ 
+  annotate("segment", x = 2.25, xend = 2.25, y = -0, yend = -4, size=0.4)+ 
+
+  annotate("segment", x = 3, xend = 3.25, y = -2, yend = -2, size=0.6)+
+  annotate("segment", x = 3, xend = 3, y = -0, yend = -4, size=0.4)+ 
+  annotate("segment", x = 3.25, xend = 3.25, y = -0, yend = -4, size=0.4)+ 
+
+## Among Genetic Clusters
+  geom_text(aes(x=1.5, y=-35, label="NS"), size=4, vjust=0, hjust=0, color="black") +
+  geom_text(aes(x=2.7, y=-35, label="NS"), size=4, vjust=0, hjust=0, color="black")+
+
+  annotate("segment", x = 1.2, xend = 1.9, y = -30, yend = -30, size=0.6)+
+  annotate("segment", x = 1.2, xend = 1.2, y = -28, yend = -32, size=0.4)+ 
+  annotate("segment", x = 1.9, xend = 1.9, y = -28, yend = -32, size=0.4)+ 
+
+  annotate("segment", x = 2.3, xend = 3.1, y = -30, yend = -30, size=0.6)+
+  annotate("segment", x = 2.3, xend = 2.3, y = -28, yend = -32, size=0.4)+ 
+  annotate("segment", x = 3.1, xend = 3.1, y = -28, yend = -32, size=0.4) 
+
+dev.off()
+
+
+######################################################################
+## TFAP
+
+## Create pdf where each page is a separate plot.
+
+pdf("H1.tfap.pdf", width = 12, height = 8)
+
+ggplot(Exp.plot, aes_string(x='GC', y="TFAP",
+                                      fill='Treatment.y'))+
+  geom_boxplot()+
+  scale_fill_manual(values=c("#009E73", "#0072B2", "#D55E00"),
+                    labels=c('Control', 'C. z. brevirostris', 'C. f. pallescens South'))+  
+  scale_x_discrete(labels=c('C. z. brevirostris', 'C. f. pallescens North', 'C. f. pallescens South')) +                                     
+  theme_bw()+
+  ylab("Total Number of FAPs")+
+  xlab("Genetic Clusters")+
+  theme(axis.text.x = element_blank(),
+        #axis.text.x = element_text(size=14, hjust=0.35),
+        axis.title.x = element_text(face = "bold", size=16, vjust=0.9), 
+        axis.title.y = element_text(face = "bold", size=16, margin = margin(r = 20)),
+        axis.text.y = element_text(size=14),
+        legend.text=element_text(size=14),
+        legend.title=element_text(face = "bold", size=16),
+        axis.ticks.x = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  guides(fill=guide_legend(title="Treatments")) +
+  ## custom y axis with ticks every 20
+  scale_y_continuous(breaks=seq(-20, 40, by=20)) +
+
+## X axis text
+  geom_text(aes(x=1, y=-7, label="C. z. brevirostris"), size=5, vjust=0, hjust=0.35, color="black") +
+  geom_text(aes(x=2, y=-7, label="C. f. pallecens North"), size=5, vjust=0, hjust=0.35, color="black") +
+  geom_text(aes(x=3, y=-7, label="C. f. pallecens South"), size=5, vjust=0, hjust=0.35, color="black") +
+## Among Treatments
+  geom_text(aes(x=1.1, y=-2.5, label="NS"), size=4, vjust=0, hjust=0, color="black") +
+  geom_text(aes(x=2.1, y=-2.5, label="NS"), size=4, vjust=0, hjust=0, color="black") +
+  geom_text(aes(x=3.1, y=-3, label="**"), size=8, vjust=0, hjust=0, color="black")+
+
+  annotate("segment", x = 1, xend = 1.25, y = -1, yend = -1, size=0.6)+
+  annotate("segment", x = 1, xend = 1, y = -0.7, yend = -1.3, size=0.4)+ 
+  annotate("segment", x = 1.25, xend = 1.25, y = -0.7, yend = -1.3, size=0.4)+ 
+
+  annotate("segment", x = 2, xend = 2.25, y = -1, yend = -1, size=0.6)+
+  annotate("segment", x = 2, xend = 2, y = -0.7, yend = -1.3, size=0.4)+ 
+  annotate("segment", x = 2.25, xend = 2.25, y = -0.7, yend = -1.3, size=0.4)+ 
+
+  annotate("segment", x = 3, xend = 3.25, y = -1, yend = -1, size=0.6)+
+  annotate("segment", x = 3, xend = 3, y = -0.7, yend = -1.3, size=0.4)+ 
+  annotate("segment", x = 3.25, xend = 3.25, y = -0.7, yend = -1.3, size=0.4)+ 
+
+## Among Genetic Clusters
+  geom_text(aes(x=1.5, y=-9.5, label="**"), size=8, vjust=0, hjust=0, color="black") +
+  geom_text(aes(x=2.7, y=-9.5, label="**"), size=8, vjust=0, hjust=0, color="black")+
+
+  annotate("segment", x = 1.2, xend = 1.9, y = -8.2, yend = -8.2, size=0.6)+
+  annotate("segment", x = 1.2, xend = 1.2, y = -7.9, yend = -8.5, size=0.4)+ 
+  annotate("segment", x = 1.9, xend = 1.9, y = -7.9, yend = -8.5, size=0.4)+ 
+
+  annotate("segment", x = 2.4, xend = 3.2, y = -8.2, yend = -8.2, size=0.6)+
+  annotate("segment", x = 2.4, xend = 2.4, y = -7.9, yend = -8.5, size=0.4)+ 
+  annotate("segment", x = 3.2, xend = 3.2, y = -7.9, yend = -8.5, size=0.4) 
+
+dev.off()
+
+
+```
+
+```{r Correlations}
+
+## Check Data
+View(Exp.glm.c)
+colnames(Exp.glm.c)
+
+colnames(Exp.glm.noTr)
+
+install.packages("GGally")
+library(GGally)
+
+
+# define a couple custom functions
+my_diag <- function(data, mapping, ...) {
+  ggplot(data = data, mapping = mapping) + 
+    geom_density(fill = "steelblue", color = "black")
+}
+
+my_lower <- function(data, mapping, ...) {
+  ggplot(data = data, mapping = mapping) + 
+    geom_smooth(method = "lm", color = "orange", se = F) +
+    geom_point(alpha = .8, size = 1/3, color = "blue")
+  }
+
+
+pdf("S1_ind.corr.pdf", width = 14, height = 10)
+
+# plug those custom functions into `ggpairs()`
+ggpairs(data = Exp.glm.noTr, columns = c(6:8, 11),
+        upper = list(continuous = wrap("cor", family = "sans", color = "black")),
+        diag = list(continuous = my_diag),
+        lower = list(continuous = my_lower))
+
+dev.off()
+
+
+
+
+```
+
+
+```{r Mixed Models with BRMS: H1 and H2}
+
+install.packages("rstan", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+install.packages("brms")
+library(brms)
+
+colnames(Exp.sem.clim.raw)
+colnames(Exp.glm.c)
+head(Exp.sem.clim.raw)
+str(Exp.sem.clim.raw)
+
+
+#############################################
+## DATA WITHOUT TREATMENT
+
+## Scaled the independent variables
+Exp.glm.noTr <- Exp.sem.clim.raw
+Exp.glm.noTr[,c(6:ncol(Exp.glm.noTr))] <- scale(Exp.glm.noTr[,c(6:ncol(Exp.glm.noTr))])
+View(Exp.glm.noTr)
+str(Exp.glm.noTr)
+
+## Complete cases in Exp.glm.noTr
+Exp.glm.noTr <- Exp.glm.noTr[complete.cases(Exp.glm.noTr),]
+
+## Making GC in Exp.glm.noTr a factor
+Exp.glm.noTr$GC <- as.factor(Exp.glm.noTr$GC)
+
+#############################################
+## DATA WITH TREATMENT
+
+## convert Treatment.y to duumy variables in Exp.glm.c
+View(Exp.glm.c)
+str(Exp.glm.c)
+
+## Create dummy variable for Treatment.y
+dummy_vars <- model.matrix(~ Treatment.y - 1, data = Exp.glm.c)
+
+# Step 2: Convert the matrix to a data frame
+dummy_vars_df <- as.data.frame(dummy_vars)
+
+# Step 3: Merge the new data frame with the original data frame
+Exp.dummy <- cbind(Exp.glm.c, dummy_vars_df)
+View(Exp.dummy)
+
+Exp.dummy$Treatment.yBBWR <- as.integer(Exp.dummy$Treatment.yBBWR)
+
+## Making GC in Exp.dummy a factor
+Exp.dummy$GC <- as.factor(Exp.dummy$GC)
+
+## Make Treament.y in Exp.dummy a factor
+Exp.dummy$Treatment.y <- as.factor(Exp.dummy$Treatment.y)
+
+View(Exp.dummy)
+str(Exp.dummy)
+range(Exp.dummy$TFAP)
+
+## Write Exp.dummy to csv
+write.csv(Exp.dummy, "Exp.dummy_h1.csv")
+
+## Remove row with Control in column Treatment.y
+Exp.dummy_h3 <- Exp.dummy[Exp.dummy$Treatment.y != "Control",]
+
+## Write Exp.dummy to csv
+write.csv(Exp.dummy_h3, "Exp.dummy_h3.csv")
+
+#############################################
+
+## With Treament
+b.form.dist.H1 <- bf(Dist+1|trunc(ub=100) ~ 1 + Treatment.y*GC,
+                 family=lognormal())
+
+## Run Multivariate Model
+brms.dist.H1 <- brm(b.form.dist.H1, data=Exp.dummy,
+            warmup=50000,
+            iter=100000,
+            chains = 10,
+            thin=4,
+            cores = 4,
+            control = list(adapt_delta = 0.97),
+            seed=123)
+
+load("./BRMS_Hipergator/H1_brms_dist_nocontrol.RData")
+
+sum.dist.H1 <- summary(brms.dist.H1)
+str(sum.dist.H1$fixed)
+
+h1.dist.90 <- as_draws_matrix(brms.dist.H1, regex=TRUE)
+h1.dist.90 <- as.data.frame(h1.dist.90[,2:6])
+str(h1.dist.90)
+
+h1.dist.90.long <- reshape2::melt(h1.dist.90)
+dim(h1.dist.90.long)
+head(h1.dist.90.long)
+
+h1.dist.90 <- h1.dist.90.long %>%
+  group_by(variable) %>%
+  summarise(Median=median(value),
+            ci.lower=quantile(value, probs=c(0.1)),
+            ci.upper=quantile(value, probs=c(0.9)))
+
+
+#############################################
+
+range(Exp.dummy$Timing_sec)
+hist(Exp.dummy$Timing_sec)
+head(Exp.dummy)
+
+## With Treament
+b.form.latency.H1 <- bf(Timing_sec|trunc(lb=1) ~ 1 + Treatment.y*GC,
+                 family=lognormal())
+
+## Run Multivariate Model
+brms.latency.H1 <- brm(b.form.latency.H1, data=Exp.dummy,
+            warmup=50000,
+            iter=100000,
+            chains = 10,
+            thin=4,
+            cores = 4,
+            control = list(adapt_delta = 0.97),
+            seed=123)
+
+load("./BRMS_Hipergator/H1_brms_latency_nocontrol.RData")
+load("./BRMS_Hipergator/H1_brms_latency.RData")
+
+sum.latency.H1 <- summary(brms.latency.H1)
+str(sum.latency.H1$fixed)
+
+h1.latency.90 <- as_draws_matrix(brms.latency.H1, regex=TRUE)
+h1.latency.90 <- as.data.frame(h1.latency.90[,2:6])
+str(h1.latency.90)
+
+h1.latency.90.long <- reshape2::melt(h1.latency.90)
+dim(h1.latency.90.long)
+head(h1.latency.90.long)
+
+h1.latency.90 <- h1.latency.90.long %>%
+  group_by(variable) %>%
+  summarise(Median=median(value),
+            ci.lower=quantile(value, probs=c(0.1)),
+            ci.upper=quantile(value, probs=c(0.9)))
+
+#############################################
+
+## With Treament
+b.form.tfap.H1 <- bf(TFAP|trunc(ub=41) ~ 1 + Treatment.y*GC,
+                  family=hurdle_poisson())
+
+## Run Multivariate Model
+brms.tfap.H1 <- brm(b.form.tfap.H1, data=Exp.dummy,
+            warmup=50000,
+            iter=100000,
+            chains = 10,
+            thin=4,
+            cores = 4,
+            control = list(adapt_delta = 0.97),
+            seed=123)
+
+load("./BRMS_Hipergator/H1_brms_tfap_nocontrol.RData")
+
+sum.tfap.H1 <- summary(brms.tfap.H1)
+str(sum.tfap.H1$fixed)
+
+h1.tfap.90 <- as_draws_matrix(brms.tfap.H1, regex=TRUE)
+h1.tfap.90 <- as.data.frame(h1.tfap.90[,2:6])
+str(h1.tfap.90)
+
+h1.tfap.90.long <- reshape2::melt(h1.tfap.90)
+dim(h1.tfap.90.long)
+head(h1.tfap.90.long)
+
+h1.tfap.90 <- h1.tfap.90.long %>%
+  group_by(variable) %>%
+  summarise(Median=median(value),
+            ci.lower=quantile(value, probs=c(0.1)),
+            ci.upper=quantile(value, probs=c(0.9)))
+
+
+##########################################################
+
+## Get ataframes sum.dist.H1$fixed, sum.latency.H1$fixed, sum.tfap.H1$fixed in same dataframe with rbind and add column for variable
+h1.ce <- rbind(sum.dist.H1$fixed, sum.latency.H1$fixed, sum.tfap.H1$fixed)
+View(h1.ce)
+
+## add a column with variable names for every six rows
+h1.ce$Variable <- c("Distance", "Distance", "Distance", "Distance", "Distance", "Distance",
+                    "Latency", "Latency", "Latency", "Latency", "Latency", "Latency",
+                    "TFAP", "TFAP", "TFAP", "TFAP", "TFAP", "TFAP")
+
+h1.ce$Variable <- factor(h1.ce$Variable, levels=c("Distance", "Latency", "TFAP"))
+
+h1.ce$Term <- rownames(h1.ce)
+
+colnames(h1.ce)[3:4] <- c("ci.lower", "ci.upper")
+
+## change the terms names in terms
+h1.ce$Term <- factor(c("Intercept", "Treatment", "C. f. pallescens North", "C. f. pallescens South", 
+              paste("Treatment", "\n", "C. f. pallescens North", sep="\t"), 
+              paste("Treatment", "\n", "C. f. pallescens South", sep="\t"),
+                "Intercept", "Treatment", "C. f. pallescens North", "C. f. pallescens South", 
+              paste("Treatment", "\n", "C. f. pallescens North", sep="\t"), 
+              paste("Treatment", "\n", "C. f. pallescens South", sep="\t"),
+                "Intercept", "Treatment", "C. f. pallescens North", "C. f. pallescens South", 
+              paste("Treatment", "\n", "C. f. pallescens North", sep="\t"), 
+              paste("Treatment", "\n", "C. f. pallescens South", sep="\t")), 
+              
+              levels=c("Intercept", "Treatment", "C. f. pallescens North", "C. f. pallescens South", 
+              paste("Treatment", "\n", "C. f. pallescens North", sep="\t"), 
+              paste("Treatment", "\n", "C. f. pallescens South", sep="\t")), ordered=TRUE)
+
+               
+              
+h1.ce$Term <- factor(h1.ce$Term, levels= rev(levels(h1.ce$Term)))
+
+levels(h1.ce$Term)
+View(h1.ce)
+
+## Load ggplot2
+library(ggplot2)
+
+## Make a forest plot with h1.ce filling colors by variable
+
+## save plot
+pdf("plot.h1.coef.pdf", width = 10, height = 12)
+
+ggplot(data=h1.ce, aes(x=Estimate, y=Term, color=Variable)) +
+  geom_point(position=position_dodge(width=1), size=4) +
+  geom_errorbarh(aes(xmin=ci.lower, xmax=ci.upper, width=1.5), 
+      position=position_dodge(width=1), size=1.5)+ 
+  scale_color_manual(values=c("#0072B2","#009E73", "#D55E00"))+
+  ## add names of y variables in order of terms in scale_y_discrete(name = "", labels=terms) +
+  #scale_y_discrete(name = "", labels=h1.ce$term) +
+  geom_vline(xintercept=0, color="red", linetype="dashed") +
+  # without background
+  theme_bw()+
+ 
+## Increae font size of labels and titles including legends
+theme(axis.text.y = element_text(size=16),
+                     axis.text.x = element_text(size=14),
+                     legend.text=element_text(size=14),
+                     legend.title=element_text(size=18),
+                     axis.title.y=element_blank(),
+                     axis.title.x=element_text(size=18))
+
+
+
+dev.off()
+
+
+```
+
+```{r Mixed Models with BRMS: H3}
+
+install.packages("rstan", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+library(rstan)
+install.packages("brms")
+library(brms)
+
+
+colnames(Exp.sem.clim.raw)
+colnames(Exp.glm.c)
+head(Exp.sem.clim.raw)
+str(Exp.sem.clim.raw)
+
+#############################################
+## DATA WITHOUT TREATMENT
+
+## Scaled the independent variables
+Exp.glm.noTr <- Exp.sem.clim.raw
+Exp.glm.noTr[,c(6:ncol(Exp.glm.noTr))] <- scale(Exp.glm.noTr[,c(6:ncol(Exp.glm.noTr))])
+View(Exp.glm.noTr)
+str(Exp.glm.noTr)
+
+## Complete cases in Exp.glm.noTr
+Exp.glm.noTr <- Exp.glm.noTr[complete.cases(Exp.glm.noTr),]
+
+## Making GC in Exp.glm.noTr a factor
+Exp.glm.noTr$GC <- as.factor(Exp.glm.noTr$GC)
+
+#############################################
+## DATA WITH TREATMENT
+
+## convert Treatment.y to duumy variables in Exp.glm.c
+View(Exp.glm.c)
+str(Exp.glm.c)
+
+## Remove rows where the variable Treatment.y is equal to Control
+Exp.glm.c <- subset(Exp.glm.c, Treatment.y != "Control")
+
+## Create dummy variable for Treatment.y
+dummy_vars <- model.matrix(~ Treatment.y - 1, data = Exp.glm.c)
+
+# Step 2: Convert the matrix to a data frame
+dummy_vars_df <- as.data.frame(dummy_vars)
+
+# Step 3: Merge the new data frame with the original data frame
+Exp.dummy <- cbind(Exp.glm.c, dummy_vars_df)
+
+Exp.dummy$Treatment.yBBWR <- as.integer(Exp.dummy$Treatment.yBBWR)
+
+## Making GC in Exp.dummy a factor
+Exp.dummy$GC <- as.factor(Exp.dummy$GC)
+
+## Make Treament.y in Exp.dummy a factor
+Exp.dummy$Treatment.y <- as.factor(Exp.dummy$Treatment.y)
+
+View(Exp.dummy)
+str(Exp.dummy)
+range(Exp.dummy$TFAP)
+
+## Write Exp.dummy to csv
+write.csv(Exp.dummy, "Exp.dummy.csv")
+
+
+#######################      MinDist      ######################################
+
+
+#############################################
+
+## With Treament
+b.form.dist <- bf(Dist+1|trunc(ub=100) ~ evi + AMT + AMP + PS + Inv + (1|Treatment.y) + (1|GC),
+                 family=lognormal())
+
+#############################################
+## Mediator model
+b.evi <- bf(evi ~ AMT + AMP + PS)
+
+## Run Multivariate Model
+brms.dist <- brm(b.form.dist + b.evi, data=Exp.dummy,
+            warmup=70000,
+            iter=100000,
+            chains = 10,
+            thin=4,
+            cores = 8,
+            control = list(adapt_delta = 0.9),
+            seed=123)
+
+load("./BRMS_Hipergator3pred/H3_brms_dist.RData")
+
+summary(brms.dist)
+
+str(brms.dist)
+
+## Plotting
+pp_check(brms.dist, resp="MinDist", ndraws=100)
+conditional_effects(brms.dist, surface=TRUE)
+mcmc_plot(brms.dist, variable=c("AMT", "AMP", "PS", "evi", "Inv"), regex=TRUE)
+plot(brms.dist)
+
+## Getting Effects
+
+## Indirect effect Climate to Evi
+a.dist <- as_draws_matrix(brms.dist, variable="b_evi", regex=TRUE)
+head(a.dist)
+a.dist.2 <- a.dist[,c(2:4)]
+str(a.dist.2)
+head(a.dist.2)
+
+## Indirect effect Evi to Distance
+b.dist <- as_draws_matrix(brms.dist, variable="b_Dist1_evi", regex=TRUE)
+head(b.dist)
+
+## Make a descritive summary statistics of b.dist
+View(summary(b.dist))
+b.dist.2 <- b.dist[,1]
+str(b.dist.2)
+head(b.dist.2)
+
+## Getting the Indirect Effect
+indirect.dist <- a.dist.2
+head(indirect.dist)
+indirect.dist[,1] <- indirect.dist[,1]*b.dist.2
+indirect.dist[,2] <- indirect.dist[,2]*b.dist.2
+indirect.dist[,3] <- indirect.dist[,3]*b.dist.2
+str(indirect.dist)
+head(indirect.dist)
+dim(indirect.dist)
+View(summary(indirect.dist))
+
+## get median and confidence intervals for indirect effect for each variable
+indirect.dist.ci <- data.frame(
+    AMT = median(indirect.dist[,1]),
+    AMP = median(indirect.dist[,2]),
+    PS = median(indirect.dist[,3]),
+    AMT.ci = quantile(indirect.dist[,1], probs=c(0.05, 0.95)),
+    AMP.ci = quantile(indirect.dist[,2], probs=c(0.05, 0.95)),
+    PS.ci = quantile(indirect.dist[,3], probs=c(0.05, 0.95))
+)
+View(indirect.dist.ci)
+
+## Get the total effect
+#total <- a.dist + indirect
+#ci.a.dist <- quantile(a.dist$b_evi, probs=c(0.025, 0.975))
+
+## Get b values brms.dist for diret effects
+b.dist <- as_draws_matrix(brms.dist, variable="b_Dist1", regex=TRUE)
+head(b.dist)
+
+cprime.dist <- b.dist[,2:6]
+head(cprime.dist)
+
+## Cbind cprime and indirect
+cprime.indirect.dist <- cbind(cprime.dist, indirect.dist)
+head(cprime.indirect.dist)
+colnames(cprime.indirect.dist)
+
+## Put cprime.indirect.dist in long format
+cprime.indirect.dist.long <- reshape2::melt(cprime.indirect.dist)
+#cprime.indirect.dist.long <- reshape2::melt(cprime.indirect.dist, id.vars = c("b_Dist1[1]","b_Dist1[2]","b_Dist1[3]","b_Dist1[4]","b_Dist1[5]"))
+head(cprime.indirect.dist.long)
+dim(cprime.indirect.dist.long)
+head(cprime.indirect.dist.long)
+
+## Install tidyverse
+install.packages("tidyverse")
+library(tidyverse)
+
+
+## Get confidence intervals for cprime.indirect.dist.long per variable in Var2
+cprime.indirect.dist.long.ci <- cprime.indirect.dist.long %>%
+  group_by(Var2) %>%
+  summarise(Median=median(value),
+            ci.lower=quantile(value, probs=c(0.05)),
+            ci.upper=quantile(value, probs=c(0.95)))
+
+View(cprime.indirect.dist.long.ci)
+dim(cprime.indirect.dist.long.ci)
+
+## Get b values brms.dist for diret effect of number of individuals in the breeding group
+inv_stats <- as.data.frame(b.dist) %>% 
+  summarise(Var2 = "b_Dist1_Inv",
+            Median = median(b_Dist1_Inv),
+            ci.lower = quantile(b_Dist1_Inv, probs=c(0.05)),
+            ci.upper = quantile(b_Dist1_Inv, probs=c(0.95)))
+
+cprime.indirect.dist.long.ci <- rbind(inv_stats, cprime.indirect.dist.long.ci)
+
+#load ggplot2
+library(ggplot2)
+
+#create forest plot 
+## Make a vector with names of the terms
+Effects <- c("Direct Effect",
+"Direct Effect",
+ "Direct Effect",
+"Direct Effect",
+"Direct Effect",
+paste("Indirect Effect",  "\n", "EVI-mediated"),
+paste("Indirect Effect",  "\n", "EVI-mediated"), 
+paste("Indirect Effect",  "\n", "EVI-mediated"))
+
+var <- factor(c(
+"EVI",
+"AMT",
+"AMP",
+"PS",
+paste("Group", "\n", "Size"),
+"AMT",
+"AMP", 
+"PS"), levels=c(paste("Group", "\n", "Size"), "EVI", "PS", "AMP", "AMT"), ordered=TRUE)
+
+
+dist.med.data <- cbind(cprime.indirect.dist.long.ci, Effects)
+dist.med.data <- cbind(dist.med.data, var)
+View(dist.med.data)
+
+###### PLOTTING ########
+
+## save plot
+
+pdf("h3.dist.pdf", width = 10, height = 12)
+
+ggplot(data=dist.med.data, aes(x=Median, y=var, color=Effects)) +
+  geom_point(position=position_dodge(width=1), size=6) +
+  geom_errorbarh(aes(xmin=ci.lower, xmax=ci.upper), 
+      position=position_dodge(width=1), linewidth=1.5) +
+      ## add plot title, center and larger font
+  ggtitle("Minimum Distance")+
+  #theme(plot.title = element_text(hjust = 0.5, size=20))+
+  scale_color_manual(values=c("#0072B2", "#D55E00"))+
+  geom_vline(xintercept=0, color="red", linetype="dashed", linewidth =1.5) +
+  # without background
+  theme_bw()+
+  ## remove y title
+  theme(axis.title.y=element_blank())+
+  ## Increase font size of labels and titles including legends
+  theme(plot.title = element_text(hjust = 0.5, vjust = 1, size=34),
+        axis.title.y=element_blank(),
+        axis.text.y = element_text(size=25),
+        axis.text.x = element_text(size=22),
+        legend.text=element_text(size=25, margin = margin(r = 50)),
+        legend.spacing.y = unit(1, 'cm'),
+        legend.title=element_blank(),
+        legend.position = c(0.85, 0.9),
+        axis.title.x=element_text(size=28,margin = margin(t = 20, r = 0, b = 0, l = 0)),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+        guides(fill = guide_legend(byrow = TRUE))+
+        ## change title of x 
+        labs(x = "Median Effect Size (95% CI)")
+
+dev.off()
+
+
+
+#######################      Latency      #########################################
+
+
+## With Treament
+b.form.latency <- bf(Timing_sec|trunc(lb=1) ~ evi + AMT + AMP + PS + Inv + (1|Treatment.y) + (1|GC),
+                  family=lognormal())
+
+#############################################
+## Mediator model
+b.evi <- bf(evi ~ AMT + AMP + PS)
+
+## Run Multivariate Model
+brms.latency <- brm(b.form.latency + b.evi, data=Exp.dummy_h3,
+                 warmup=50000,
+                 iter=100000,
+                 chains = 10,
+                 thin=4,
+                 cores = 8,
+                 control = list(adapt_delta = 0.97),
+                 seed=123)
+
+
+load("./BRMS_Hipergator3pred/H3_brms_latency.RData")
+
+summary(brms.latency)
+
+str(brms.latency)
+
+## Plotting
+pp_check(brms.latency, resp="Timing_sec", ndraws=100)
+conditional_effects(brms.latency, surface=TRUE)
+mcmc_plot(brms.latency, variable=c("AMT", "AMP", "PS", "evi", "Inv"), regex=TRUE)
+plot(brms.latency)
+
+
+## Getting Effects
+
+## Indirect effect Climate to Evi
+a.latency <- as_draws_matrix(brms.latency, variable="b_evi", regex=TRUE)
+head(a.latency)
+a.latency.2 <- a.latency[,c(2:4)]
+str(a.latency.2)
+head(a.latency.2)
+
+## Indirect effect Evi to Distance
+b.latency <- as_draws_matrix(brms.latency, variable="b_Timingsec_evi", regex=TRUE)
+head(b.latency)
+b.latency.2 <- b.latency[,1]
+str(b.latency.2)
+head(b.latency.2)
+
+## Getting the Indirect Effect
+indirect.latency <- a.latency.2
+indirect.latency[,1] <- indirect.latency[,1]*b.latency.2
+indirect.latency[,2] <- indirect.latency[,2]*b.latency.2
+indirect.latency[,3] <- indirect.latency[,3]*b.latency.2
+str(indirect.latency)
+head(indirect.latency)
+dim(indirect.latency)
+View(summary(indirect.latency))
+
+## get median and confidence intervals for indirect effect for each variable
+indirect.latency.ci <- data.frame(
+    AMT = median(indirect.latency[,1]),
+    AMP = median(indirect.latency[,2]),
+    PS = median(indirect.latency[,3]),
+    AMT.ci = quantile(indirect.latency[,1], probs=c(0.025, 0.975)),
+    AMP.ci = quantile(indirect.latency[,2], probs=c(0.025, 0.975)),
+    PS.ci = quantile(indirect.latency[,3], probs=c(0.025, 0.975))
+)
+
+
+## Get the total effect
+#total <- a.dist + indirect
+#ci.a.dist <- quantile(a.dist$b_evi, probs=c(0.025, 0.975))
+
+## Get b values brms.dist for diret effects
+b.latency <- as_draws_matrix(brms.latency, variable="b_Timingsec", regex=TRUE)
+
+cprime.latency <- b.latency[,2:5]
+head(cprime.latency)
+
+## Cbind cprime and indirect
+cprime.indirect.latency <- cbind(cprime.latency, indirect.latency)
+colnames(cprime.indirect.latency)
+
+## Put cprime.indirect.dist in long format
+cprime.indirect.latency.long <- reshape2::melt(cprime.indirect.latency, id.vars = c("b_latency[1]","b_latency[2]","b_latency[3]","b_latency[4]"))
+head(cprime.indirect.latency.long)
+
+library(tidyverse)
+## Get confidence intervals for cprime.indirect.dist.long per variable in Var2
+cprime.indirect.latency.long.ci <- cprime.indirect.latency.long %>%
+  group_by(Var2) %>%
+  summarise(Median=median(value),
+            ci.lower=quantile(value, probs=c(0.025)),
+            ci.upper=quantile(value, probs=c(0.975)))
+
+View(cprime.indirect.latency.long.ci)
+
+## Get b values brms.dist for diret effect of number of individuals in the breeding group
+inv_stats.l <- as.data.frame(b.latency) %>% 
+  summarise(Var2 = "b_Timingsec_Inv",
+            Median = median(b_Timingsec_Inv),
+            ci.lower = quantile(b_Timingsec_Inv, probs=c(0.025)),
+            ci.upper = quantile(b_Timingsec_Inv, probs=c(0.975)))
+
+cprime.indirect.latency.long.ci <- rbind(inv_stats.l, cprime.indirect.latency.long.ci)
+
+#load ggplot2
+library(ggplot2)
+
+latency.med.data <- cbind(cprime.indirect.latency.long.ci, Effects)
+latency.med.data <- cbind(latency.med.data, var)
+View(latency.med.data)
+
+###### PLOTTING ########
+
+## save plot
+
+pdf("h3.latency.pdf", width = 10, height = 12)
+
+ggplot(data=latency.med.data, aes(x=Median, y=var, color=Effects)) +
+  geom_point(position=position_dodge(width=1), size=6) +
+  geom_errorbarh(aes(xmin=ci.lower, xmax=ci.upper), 
+      position=position_dodge(width=1), linewidth=1.5) +
+      ## add plot title, center and larger font
+  ggtitle("Latency")+
+  #theme(plot.title = element_text(hjust = 0.5, size=20))+
+  scale_color_manual(values=c("#0072B2", "#D55E00"))+
+  geom_vline(xintercept=0, color="red", linetype="dashed", linewidth =1.5) +
+  # without background
+  theme_bw()+
+  ## remove y title
+  theme(axis.title.y=element_blank())+
+  ## Increase font size of labels and titles including legends
+  theme(plot.title = element_text(hjust = 0.5, vjust = 1, size=34),
+        axis.title.y=element_blank(),
+        axis.text.y = element_text(size=25),
+        axis.text.x = element_text(size=22),
+        legend.text=element_text(size=25, margin = margin(r = 50)),
+        legend.spacing.y = unit(1, 'cm'),
+        legend.title=element_blank(),
+        legend.position = c(0.25, 0.9),
+        axis.title.x=element_text(size=28,margin = margin(t = 20, r = 0, b = 0, l = 0)),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+        guides(fill = guide_legend(byrow = TRUE))+
+        ## change title of x 
+        labs(x = "Median Effect Size (95% CI)")
+
+dev.off()
+
+
+#######################      TFAP     #########################################
+
+
+## With Treament
+b.form.tfap <- bf(TFAP|trunc(ub=41) ~ evi + AMT + AMP + PS + Inv + (1|Treatment.y) + (1|GC),
+                 family=hurdle_poisson())
+
+
+#############################################
+## Mediator model
+b.evi <- bf(evi ~ AMT + AMP + PS)
+
+
+#############################################
+
+## Run Multivariate Model
+brms.tfap <- brm(b.form.tfap + b.evi, data=Exp.dummy,
+            warmup=70000,
+            iter=100000,
+            chains = 10,
+            thin=4,
+            cores = 4,
+            control = list(adapt_delta = 0.9),
+            seed=123)
+
+load("./BRMS_Hipergator3pred/H3_brms_tfap.RData")
+
+summary(brms.tfap)
+
+str(brms.tfap)
+
+## Plotting
+pp_check(brms.tfap, resp="MinDist", ndraws=100)
+conditional_effects(brms.tfap, surface=TRUE)
+mcmc_plot(brms.tfap, variable=c("AMT", "AMP", "PS", "evi", "Inv"), regex=TRUE)
+plot(brms.tfap)
+
+
+## Getting Effects
+
+## Indirect effect Climate to Evi
+a.tfap <- as_draws_matrix(brms.tfap, variable="b_evi", regex=TRUE)
+head(a.tfap)
+a.tfap.2 <- a.tfap[,c(2:4)]
+str(a.tfap.2)
+head(a.tfap.2)
+
+## Indirect effect Evi to Distance
+b.tfap <- as_draws_matrix(brms.tfap, variable="b_TFAP_evi", regex=TRUE)
+head(b.tfap)
+b.tfap.2 <- b.tfap[,1]
+str(b.tfap.2)
+head(b.tfap.2)
+
+## Getting the Indirect Effect
+indirect.tfap <- a.tfap.2
+indirect.tfap[,1] <- indirect.tfap[,1]*b.tfap.2
+indirect.tfap[,2] <- indirect.tfap[,2]*b.tfap.2
+indirect.tfap[,3] <- indirect.tfap[,3]*b.tfap.2
+str(indirect.tfap)
+head(indirect.tfap)
+dim(indirect.tfap)
+View(summary(indirect.tfap))
+
+## get median and confidence intervals for indirect effect for each variable
+indirect.tfap.ci <- data.frame(
+    AMT = median(indirect.tfap[,1]),
+    AMP = median(indirect.tfap[,2]),
+    PS = median(indirect.tfap[,3]),
+    AMT.ci = quantile(indirect.tfap[,1], probs=c(0.05, 0.95)),
+    AMP.ci = quantile(indirect.tfap[,2], probs=c(0.05, 0.95)),
+    PS.ci = quantile(indirect.tfap[,3], probs=c(0.05, 0.95))
+)
+
+
+## Get the total effect
+#total <- a.dist + indirect
+#ci.a.dist <- quantile(a.dist$b_evi, probs=c(0.025, 0.975))
+
+## Get b values brms.dist for diret effects
+b.tfap <- as_draws_matrix(brms.tfap, variable="b_TFAP", regex=TRUE)
+head(b.tfap)
+
+cprime.tfap <- b.tfap[,2:6]
+head(cprime.tfap)
+
+## Cbind cprime and indirect
+cprime.indirect.tfap <- cbind(cprime.tfap, indirect.tfap)
+colnames(cprime.indirect.tfap)
+
+## Put cprime.indirect.dist in long format
+cprime.indirect.tfap.long <- reshape2::melt(cprime.indirect.tfap)
+head(cprime.indirect.tfap.long)
+
+## Get confidence intervals for cprime.indirect.dist.long per variable in Var2
+cprime.indirect.tfap.long.ci <- cprime.indirect.tfap.long %>%
+  group_by(Var2) %>%
+  summarise(Median=median(value),
+            ci.lower=quantile(value, probs=c(0.05)),
+            ci.upper=quantile(value, probs=c(0.95)))
+
+View(cprime.indirect.tfap.long.ci)
+dim(cprime.indirect.tfap.long.ci)
+
+## Get b values brms.dist for diret effect of number of individuals in the breeding group
+inv_stats.t <- as.data.frame(b.tfap) %>% 
+  summarise(Var2 = "b_tfap_Inv",
+            Median = median(b_TFAP_Inv),
+            ci.lower = quantile(b_TFAP_Inv, probs=c(0.025)),
+            ci.upper = quantile(b_TFAP_Inv, probs=c(0.975)))
+
+cprime.indirect.tfap.long.ci <- rbind(inv_stats.t, cprime.indirect.tfap.long.ci)
+
+
+#load ggplot2
+library(ggplot2)
+
+tfap.med.data <- cbind(cprime.indirect.tfap.long.ci, Effects)
+tfap.med.data <- cbind(tfap.med.data, var)
+View(tfap.med.data)
+
+###### PLOTTING ########
+
+## save plot
+
+pdf("h3.tfap.pdf", width = 10, height = 12)
+
+ggplot(data=tfap.med.data, aes(x=Median, y=var, color=Effects)) +
+  geom_point(position=position_dodge(width=1), size=6) +
+  geom_errorbarh(aes(xmin=ci.lower, xmax=ci.upper), 
+      position=position_dodge(width=1), linewidth=1.5) +
+      ## add plot title, center and larger font
+  ggtitle("Total Number of FAPs")+
+  #theme(plot.title = element_text(hjust = 0.5, size=20))+
+  scale_color_manual(values=c("#0072B2", "#D55E00"))+
+  geom_vline(xintercept=0, color="red", linetype="dashed", linewidth =1.5) +
+  # without background
+  theme_bw()+
+  ## remove y title
+  theme(axis.title.y=element_blank())+
+  ## Increase font size of labels and titles including legends
+  theme(plot.title = element_text(hjust = 0.5, vjust = 1, size=34),
+        axis.title.y=element_blank(),
+        axis.text.y = element_text(size=25),
+        axis.text.x = element_text(size=22),
+        legend.text=element_text(size=25, margin = margin(r = 50)),
+        legend.spacing.y = unit(1, 'cm'),
+        legend.title=element_blank(),
+        legend.position = c(0.85, 0.9),
+        axis.title.x=element_text(size=28,margin = margin(t = 20, r = 0, b = 0, l = 0)),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+        guides(fill = guide_legend(byrow = TRUE))+
+        ## change title of x 
+        labs(x = "Median Effect Size (95% CI)")
+
+dev.off()
+
+```
+
+#### Saving
+
+```{r Saving}
+
+save.image('GDM_brms2.RData')
+  
+
+```
+
+#### 
+ 
+
+  
+
+
+
